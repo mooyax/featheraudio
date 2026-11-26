@@ -1,0 +1,33 @@
+[package]
+name = "featheraudio"
+version = "0.1.0"
+edition = "2021"
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
+description = "A feather-light audio engine for games: fire-and-forget sounds, buses, fades and tracker music (MOD / IT / S3M / XM), in pure Rust"
+repository = "https://github.com/mooyax/featheraudio"
+readme = "README.md"
+keywords = ["audio", "gamedev", "sound", "mixer", "tracker"]
+categories = ["multimedia::audio", "game-development"]
+
+[features]
+default = ["cpal", "tracker"]
+# audio output through cpal (Windows / macOS / Linux / Android / iOS); without it, call Mixer::render yourself
+cpal = ["dep:cpal"]
+# tracker music: all three engines
+tracker = ["mod", "it", "xm"]
+# ProTracker MOD engine (port of pt2-clone), about 45 KB
+mod = []
+# Impulse Tracker IT and Scream Tracker 3 S3M engine, about 100 KB
+it = []
+# FastTracker 2 XM engine (port of ft2-clone), about 60 KB
+xm = []
+
+[dependencies]
+cpal = { version = "0.15", optional = true }
+
+[profile.release]
+opt-level = 3
+
+[[example]]
+name = "play"
+required-features = ["cpal"]

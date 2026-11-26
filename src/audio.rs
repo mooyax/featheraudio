@@ -1,0 +1,370 @@
+//! The game-side half of the engine.
+
+use crate::mixer::{BusCmd, Command, Ended, Mixer, VoiceCmd, MAX_BUSES};
+use crate::source::Source;
+use std::collections::HashSet;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Mutex;
+
+/// Identifies one playing sound. Stays valid after the sound ends (calls on it then do
+/// nothing), and is never reused.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Handle(pub(crate) u32);
+
+/// A group of voices with its own volume, fades and pause, e.g. music, effects, UI.
+/// [`Bus::MAIN`] always exists; [`Audio::create_bus`] makes more (up to 15).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Bus(pub(crate) u16);
+
+impl Bus {
+    /// The bus sounds play on unless told otherwise.
+    pub const MAIN: Bus = Bus(0);
+}
+
+/// How to play a sound. `PlayOptions::new()` is: volume 1, centred, normal speed, no loop,
+/// not paused, on [`Bus::MAIN`], not protected.
+#[derive(Clone, Copy, Debug)]
+pub struct PlayOptions {
+    pub volume: f32,
+    /// -1 (left) .. 0 (centre) .. 1 (right)
+    pub pan: f32,
+    /// playback speed; also changes the pitch (1 = normal)
+    pub speed: f32,
+    pub looping: bool,
+    /// start paused (resume with [`Audio::set_paused`])
+    pub paused: bool,
+    pub bus: Bus,
+    /// protected voices are never replaced when all voices are in use (use it for music)
+    pub protected: bool,
+}
+
+impl Default for PlayOptions {
+    fn default() -> Self {
+        PlayOptions { volume: 1.0, pan: 0.0, speed: 1.0, looping: false, paused: false, bus: Bus::MAIN, protected: false }
+    }
+}
+
+impl PlayOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn volume(mut self, v: f32) -> Self {
+        self.volume = v;
+        self
+    }
+    pub fn pan(mut self, p: f32) -> Self {
+        self.pan = p;
+        self
+    }
+    pub fn speed(mut self, s: f32) -> Self {
+        self.speed = s;
+        self
+    }
+    pub fn looping(mut self, l: bool) -> Self {
+        self.looping = l;
+        self
+    }
+    pub fn paused(mut self, p: bool) -> Self {
+        self.paused = p;
+        self
+    }
+    pub fn bus(mut self, b: Bus) -> Self {
+        self.bus = b;
+        self
+    }
+    pub fn protected(mut self, p: bool) -> Self {
+        self.protected = p;
+        self
+    }
+}
+
+struct Front {
+    commands: Sender<Command>,
+    ended: Receiver<Ended>,
+    next_handle: u32,
+    next_bus: u16,
+    /// voices that have been started and not reported as ended
+    alive: HashSet<Handle>,
+}
+
+impl Front {
+    /// takes in the voices the mixer has finished with (and drops their instances here)
+    fn collect(&mut self) {
+        while let Ok(Ended(h, _instance)) = self.ended.try_recv() {
+            self.alive.remove(&h);
+        }
+    }
+}
+
+/// The audio engine, as seen from the game. Cheap to call from any thread (`Send + Sync`);
+/// every call only queues a command for the audio thread.
+pub struct Audio {
+    front: Mutex<Front>,
+    rate: u32,
+    #[cfg(feature = "cpal")]
+    _output: Option<crate::audio::cpal_output::Output>,
+}
+
+impl Audio {
+    /// Opens the default audio output device and starts mixing on its audio thread.
+    #[cfg(feature = "cpal")]
+    pub fn new() -> Result<Audio, crate::Error> {
+        let (cmd_tx, cmd_rx) = channel();
+        let (end_tx, end_rx) = channel();
+        let (output, rate) = cpal_output::Output::start(move |rate| Mixer::new(rate, cmd_rx, end_tx))?;
+        Ok(Audio { front: Mutex::new(Front::new(cmd_tx, end_rx)), rate, _output: Some(output) })
+    }
+
+    /// Creates the engine without opening a device: you get the [`Mixer`] and call
+    /// [`Mixer::render`] yourself, from your own audio callback or offline.
+    pub fn with_manual_output(rate: u32) -> (Audio, Mixer) {
+        let (cmd_tx, cmd_rx) = channel();
+        let (end_tx, end_rx) = channel();
+        let audio = Audio {
+            front: Mutex::new(Front::new(cmd_tx, end_rx)),
+            rate,
+            #[cfg(feature = "cpal")]
+            _output: None,
+        };
+        (audio, Mixer::new(rate, cmd_rx, end_tx))
+    }
+
+    /// The output sample rate in Hz.
+    pub fn sample_rate(&self) -> u32 {
+        self.rate
+    }
+
+    fn front(&self) -> std::sync::MutexGuard<'_, Front> {
+        self.front.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn send(&self, c: Command) {
+        let _ = self.front().commands.send(c);
+    }
+
+    fn voice(&self, h: Handle, c: VoiceCmd) {
+        self.send(Command::Voice(h, c));
+    }
+
+    /// Plays a sound with the default options and returns its handle. Fire and forget: the
+    /// voice cleans itself up when it ends.
+    pub fn play(&self, source: &dyn Source) -> Handle {
+        self.play_with(source, PlayOptions::default())
+    }
+
+    /// Plays a sound with the given options.
+    pub fn play_with(&self, source: &dyn Source, opts: PlayOptions) -> Handle {
+        // the instance is created (and allocated) here, on the game side
+        let instance = source.instance(self.rate);
+        let mut f = self.front();
+        f.collect();
+        f.next_handle = f.next_handle.wrapping_add(1).max(1);
+        let handle = Handle(f.next_handle);
+        f.alive.insert(handle);
+        let _ = f.commands.send(Command::Play { handle, instance, opts });
+        handle
+    }
+
+    /// Stops a sound (with a few milliseconds of fade-out, to avoid a click).
+    pub fn stop(&self, h: Handle) {
+        self.voice(h, VoiceCmd::Stop);
+    }
+
+    /// Stops a sound after `seconds`. Combine with [`fade_volume`](Self::fade_volume) to fade out.
+    pub fn stop_after(&self, h: Handle, seconds: f32) {
+        self.voice(h, VoiceCmd::StopAfter(seconds));
+    }
+
+    pub fn set_volume(&self, h: Handle, volume: f32) {
+        self.voice(h, VoiceCmd::Volume(volume));
+    }
+
+    /// Changes the volume smoothly to `to` over `seconds`.
+    pub fn fade_volume(&self, h: Handle, to: f32, seconds: f32) {
+        self.voice(h, VoiceCmd::Fade(to, seconds));
+    }
+
+    /// -1 (left) .. 0 (centre) .. 1 (right)
+    pub fn set_pan(&self, h: Handle, pan: f32) {
+        self.voice(h, VoiceCmd::Pan(pan));
+    }
+
+    /// Playback speed (1 = normal); also changes the pitch.
+    pub fn set_speed(&self, h: Handle, speed: f32) {
+        self.voice(h, VoiceCmd::Speed(speed));
+    }
+
+    pub fn set_paused(&self, h: Handle, paused: bool) {
+        self.voice(h, VoiceCmd::Paused(paused));
+    }
+
+    pub fn set_looping(&self, h: Handle, looping: bool) {
+        self.voice(h, VoiceCmd::Looping(looping));
+    }
+
+    /// Protected voices are never replaced when all voices are in use.
+    pub fn set_protected(&self, h: Handle, protected: bool) {
+        self.voice(h, VoiceCmd::Protected(protected));
+    }
+
+    /// True while the sound has not ended. Because commands reach the audio thread a moment
+    /// later, a sound that has just been stopped can still report true briefly.
+    pub fn is_playing(&self, h: Handle) -> bool {
+        let mut f = self.front();
+        f.collect();
+        f.alive.contains(&h)
+    }
+
+    /// Number of sounds that have not ended.
+    pub fn active_voices(&self) -> usize {
+        let mut f = self.front();
+        f.collect();
+        f.alive.len()
+    }
+
+    /// How many sounds may play at once (default 32, at most 256). When a new sound starts and
+    /// all voices are in use, the oldest one that is not protected is replaced.
+    pub fn set_max_voices(&self, n: usize) {
+        self.send(Command::MaxVoices(n));
+    }
+
+    /// Creates a new bus, or returns `None` when all 15 extra buses are in use.
+    pub fn create_bus(&self) -> Option<Bus> {
+        let mut f = self.front();
+        if (f.next_bus as usize) < MAX_BUSES - 1 {
+            f.next_bus += 1;
+            Some(Bus(f.next_bus))
+        } else {
+            None
+        }
+    }
+
+    pub fn set_bus_volume(&self, b: Bus, volume: f32) {
+        self.send(Command::Bus(b, BusCmd::Volume(volume)));
+    }
+
+    pub fn fade_bus_volume(&self, b: Bus, to: f32, seconds: f32) {
+        self.send(Command::Bus(b, BusCmd::Fade(to, seconds)));
+    }
+
+    /// Pauses or resumes every sound on the bus.
+    pub fn set_bus_paused(&self, b: Bus, paused: bool) {
+        self.send(Command::Bus(b, BusCmd::Paused(paused)));
+    }
+
+    /// Stops every sound on the bus.
+    pub fn stop_bus(&self, b: Bus) {
+        self.send(Command::Bus(b, BusCmd::Stop));
+    }
+
+    pub fn set_master_volume(&self, volume: f32) {
+        self.send(Command::MasterVolume(volume));
+    }
+
+    pub fn stop_all(&self) {
+        self.send(Command::StopAll);
+    }
+}
+
+impl Front {
+    fn new(commands: Sender<Command>, ended: Receiver<Ended>) -> Front {
+        Front { commands, ended, next_handle: 0, next_bus: 0, alive: HashSet::new() }
+    }
+}
+
+#[cfg(feature = "cpal")]
+pub(crate) mod cpal_output {
+    //! Audio output through cpal. The stream lives on its own thread, so [`Audio`] stays
+    //! `Send + Sync` on every platform.
+
+    use super::Mixer;
+    use crate::Error;
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use std::sync::mpsc::{channel, sync_channel, Sender};
+    use std::thread::JoinHandle;
+
+    pub(crate) struct Output {
+        stop: Option<Sender<()>>,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    impl Drop for Output {
+        fn drop(&mut self) {
+            self.stop.take();
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+        }
+    }
+
+    impl Output {
+        pub(crate) fn start(make_mixer: impl FnOnce(u32) -> Mixer + Send + 'static) -> Result<(Output, u32), Error> {
+            let (ready_tx, ready_rx) = sync_channel::<Result<u32, Error>>(1);
+            let (stop_tx, stop_rx) = channel::<()>();
+            let thread = std::thread::Builder::new()
+                .name("featheraudio".into())
+                .spawn(move || {
+                    let stream = match open(make_mixer) {
+                        Ok((s, rate)) => {
+                            let _ = ready_tx.send(Ok(rate));
+                            s
+                        }
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(e));
+                            return;
+                        }
+                    };
+                    // keep the stream alive until the Audio is dropped
+                    let _ = stop_rx.recv();
+                    drop(stream);
+                })
+                .map_err(|e| Error::Device(e.to_string()))?;
+            let rate = ready_rx.recv().map_err(|_| Error::Device("audio thread failed to start".into()))??;
+            Ok((Output { stop: Some(stop_tx), thread: Some(thread) }, rate))
+        }
+    }
+
+    fn open(make_mixer: impl FnOnce(u32) -> Mixer) -> Result<(cpal::Stream, u32), Error> {
+        let host = cpal::default_host();
+        let device = host.default_output_device().ok_or_else(|| Error::Device("no output device".into()))?;
+        let cfg = device.default_output_config().map_err(|e| Error::Device(e.to_string()))?;
+        let rate = cfg.sample_rate().0;
+        let channels = cfg.channels() as usize;
+        let config: cpal::StreamConfig = cfg.config();
+        let mut mixer = make_mixer(rate);
+        let mut buf: Vec<f32> = vec![0.0; 8192];
+        let err = |e| eprintln!("featheraudio: stream error: {e}");
+        let stream = match cfg.sample_format() {
+            cpal::SampleFormat::F32 => device.build_output_stream(&config, move |d: &mut [f32], _| write(d, channels, &mut mixer, &mut buf, |v| v), err, None),
+            cpal::SampleFormat::I16 => device.build_output_stream(&config, move |d: &mut [i16], _| write(d, channels, &mut mixer, &mut buf, |v| (v * 32767.0) as i16), err, None),
+            cpal::SampleFormat::U16 => device.build_output_stream(&config, move |d: &mut [u16], _| write(d, channels, &mut mixer, &mut buf, |v| ((v * 32767.0) as i32 + 32768) as u16), err, None),
+            other => return Err(Error::Device(format!("unsupported sample format {other:?}"))),
+        }
+        .map_err(|e| Error::Device(e.to_string()))?;
+        stream.play().map_err(|e| Error::Device(e.to_string()))?;
+        Ok((stream, rate))
+    }
+
+    /// renders stereo and spreads it over the device's channels (mono devices get L+R)
+    fn write<T: Copy>(d: &mut [T], channels: usize, mixer: &mut Mixer, buf: &mut Vec<f32>, conv: impl Fn(f32) -> T) {
+        let frames = d.len() / channels;
+        if buf.len() < frames * 2 {
+            buf.resize(frames * 2, 0.0); // only if the device asks for an unusually large block
+        }
+        mixer.render(&mut buf[..frames * 2]);
+        for (f, frame) in d.chunks_exact_mut(channels).enumerate() {
+            let (l, r) = (buf[f * 2], buf[f * 2 + 1]);
+            if channels == 1 {
+                frame[0] = conv((l + r) * 0.5);
+                continue;
+            }
+            for (c, s) in frame.iter_mut().enumerate() {
+                *s = conv(match c {
+                    0 => l,
+                    1 => r,
+                    _ => 0.0,
+                });
+            }
+        }
+    }
+}
