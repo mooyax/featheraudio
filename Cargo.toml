@@ -18,8 +18,8 @@ effects = []
 cpal = ["dep:cpal"]
 # OGG Vorbis decoding: a built-in port of stb_vorbis (no dependencies), about 80 KB with streaming
 ogg = []
-# MP3 decoding (nanomp3, a pure Rust port of minimp3), about 60 KB
-mp3 = ["dep:nanomp3"]
+# MP3 (and MP2) decoding: a built-in port of minimp3 (no dependencies), about 65 KB
+mp3 = []
 # tracker music: all three engines
 tracker = ["mod", "it", "xm"]
 # ProTracker MOD engine (port of pt2-clone), about 45 KB
@@ -31,7 +31,6 @@ xm = []
 
 [dependencies]
 cpal = { version = "0.15", optional = true }
-nanomp3 = { version = "0.2", optional = true, default-features = false, features = ["std"] }
 
 [profile.release]
 opt-level = 3

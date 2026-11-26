@@ -1,4 +1,4 @@
-//! Compressed audio formats: OGG Vorbis (our port of stb_vorbis) and MP3 (nanomp3), behind the `ogg` and
+//! Compressed audio formats: OGG Vorbis (our port of stb_vorbis) and MP3 (our port of minimp3), behind the `ogg` and
 //! `mp3` features. Both decode from memory, frame by frame, so they can be streamed.
 
 use crate::Error;
@@ -153,44 +153,68 @@ pub fn ogg_decode_raw(data: &[u8], rounds: usize) -> Option<(usize, u32, Vec<f32
 
 #[cfg(feature = "mp3")]
 struct Mp3Decoder {
-    reader: nanomp3::Reader<std::io::Cursor<Arc<[u8]>>, f32>,
-    channels: usize,
-    rate: u32,
+    m: crate::mp3::Mp3,
 }
 
 #[cfg(feature = "mp3")]
 impl Mp3Decoder {
     fn new(data: Arc<[u8]>) -> Result<Self, Error> {
-        let reader = nanomp3::Reader::<_, f32>::new(std::io::Cursor::new(data)).map_err(|e| Error::Format(format!("MP3: {e:?}")))?;
-        let channels = reader.channels().map(|c| c.num() as usize).ok_or_else(|| Error::Format("MP3: no audio".into()))?;
-        let rate = reader.sample_rate();
-        Ok(Mp3Decoder { reader, channels, rate })
+        crate::mp3::Mp3::new(data).map(|m| Mp3Decoder { m }).ok_or_else(|| Error::Format("MP3: no audio frames found".into()))
     }
 }
 
 #[cfg(feature = "mp3")]
 impl Decoder for Mp3Decoder {
     fn channels(&self) -> usize {
-        self.channels
+        self.m.channels
     }
 
     fn rate(&self) -> u32 {
-        self.rate
+        self.m.sample_rate
     }
 
     fn decode(&mut self, out: &mut Vec<f32>) -> bool {
-        match self.reader.read_frame() {
-            Ok(Some(s)) if !s.is_empty() => {
+        match self.m.next_frame() {
+            Some(s) => {
                 out.extend_from_slice(s);
                 true
             }
-            _ => false,
+            None => false,
         }
     }
 
     fn rewind(&mut self) -> bool {
-        self.reader.seek(0).is_ok()
+        self.m.rewind();
+        true
     }
+}
+
+/// For tests against minimp3: decodes the whole file, interleaved, `rounds` times (going back
+/// to the start in between): (channels, rate, samples). Not part of the API.
+#[cfg(feature = "mp3")]
+#[doc(hidden)]
+pub fn mp3_decode_raw(data: &[u8], rounds: usize) -> Option<(usize, u32, Vec<f32>)> {
+    let mut d = Mp3Decoder::new(data.into()).ok()?;
+    let mut out = Vec::new();
+    for r in 0..rounds {
+        if r > 0 {
+            d.rewind();
+        }
+        while d.decode(&mut out) {}
+    }
+    Some((d.channels(), d.rate(), out))
+}
+
+/// For benchmarks: decodes every frame and only counts the samples. Not part of the API.
+#[cfg(feature = "mp3")]
+#[doc(hidden)]
+pub fn mp3_decode_count(data: &[u8]) -> usize {
+    let Some(mut m) = crate::mp3::Mp3::new(data.into()) else { return 0 };
+    let mut n = 0;
+    while let Some(s) = m.next_frame() {
+        n += s.len();
+    }
+    n
 }
 
 /// For benchmarks against stb_vorbis: decodes every frame and only counts the samples.

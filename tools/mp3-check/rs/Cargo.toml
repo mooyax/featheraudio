@@ -1,0 +1,13 @@
+[package]
+name = "mp3-check"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+featheraudio = { path = "../../..", default-features = false, features = ["mp3"] }
+
+[profile.release]
+overflow-checks = true
+
+[workspace]

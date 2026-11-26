@@ -641,3 +641,75 @@ mod vorbis_port {
         }
     }
 }
+
+#[cfg(feature = "mp3")]
+mod mp3_port {
+    //! The MP3 decoder is a port of minimp3; these hashes are of minimp3's own output (built
+    //! without SIMD, float output, through mp3dec_load_buf: all channels, interleaved f32,
+    //! little endian), made with tools/mp3-check.
+
+    fn fnv(samples: &[f32]) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in samples.iter().flat_map(|s| s.to_le_bytes()) {
+            h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+        }
+        h
+    }
+
+    fn check(file: &str, rounds: usize, ch: usize, rate: u32, len: usize, hash: u64) {
+        let data = std::fs::read(format!("{}/tests/data/{file}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let (c, r, s) = crate::mp3_decode_raw(&data, rounds).unwrap();
+        assert_eq!((c, r, s.len()), (ch, rate, len), "{file} x{rounds}");
+        assert_eq!(fnv(&s), hash, "{file} x{rounds}: output differs from minimp3");
+    }
+
+    #[test]
+    fn same_output_as_minimp3() {
+        check("tone.mp3", 1, 1, 22050, 5513, 0x950dad1400275a0e);
+        check("stereo.mp3", 1, 2, 22050, 26460, 0x18ca7cd2d89a20f3);
+        // MPEG Layer II
+        check("stereo.mp2", 1, 2, 32000, 39168, 0x2ff4c8dad35c5ec7);
+        let data = std::fs::read(format!("{}/tests/data/stereo.mp2", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        assert!(crate::Wav::from_bytes(&data).is_ok(), "Wav reads .mp2 too");
+    }
+
+    #[test]
+    fn same_output_after_going_back_to_the_start() {
+        check("tone.mp3", 2, 1, 22050, 11026, 0x6efbabc2b6c6de61);
+        check("stereo.mp3", 2, 2, 22050, 52920, 0x161e17ab9051f895);
+        check("stereo.mp2", 2, 2, 32000, 78336, 0x897acf163cc88b8d);
+    }
+
+    #[test]
+    fn gapless_length() {
+        // 0.6 s at 22050 Hz: the LAME tag's encoder delay and padding are removed
+        let data = std::fs::read(format!("{}/tests/data/stereo.mp3", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let (c, _, s) = crate::mp3_decode_raw(&data, 1).unwrap();
+        assert_eq!(s.len() / c, 13230);
+    }
+
+    #[test]
+    fn broken_files_do_not_panic() {
+        let mut x: u64 = 12345;
+        let mut rnd = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for file in ["stereo.mp3", "stereo.mp2"] {
+            let data = std::fs::read(format!("{}/tests/data/{file}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+            for _ in 0..300 {
+                let mut d = data.clone();
+                for _ in 0..1 + rnd() % 20 {
+                    let i = (rnd() % d.len() as u64) as usize;
+                    d[i] ^= 1 << (rnd() % 8);
+                }
+                if rnd() % 4 == 0 {
+                    d.truncate((rnd() % d.len() as u64) as usize + 1);
+                }
+                let _ = crate::mp3_decode_raw(&d, 2);
+            }
+        }
+    }
+}

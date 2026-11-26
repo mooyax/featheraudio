@@ -1,5 +1,5 @@
 //! Ogg Vorbis decoder: a port of stb_vorbis 1.25 by Sean Barrett and contributors
-//! (https://github.com/nothings/stb; public domain, or MIT at your option),
+//! (<https://github.com/nothings/stb>; public domain, or MIT at your option),
 //! reading from memory. Only what featheraudio needs: open, decode frame by frame, go back to
 //! the start. The output is bit-identical to stb_vorbis (compiled without -ffast-math).
 //!

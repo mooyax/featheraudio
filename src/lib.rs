@@ -35,6 +35,10 @@ mod audio;
 mod decode;
 pub mod effects;
 mod mixer;
+#[cfg(feature = "mp3")]
+mod mp3;
+#[cfg(feature = "mp3")]
+mod mp3_tables;
 #[cfg(feature = "ogg")]
 mod vorbis;
 mod source;
@@ -58,6 +62,10 @@ pub use wav::Wav;
 #[cfg(feature = "ogg")]
 #[doc(hidden)]
 pub use decode::{ogg_decode_count, ogg_decode_raw};
+
+#[cfg(feature = "mp3")]
+#[doc(hidden)]
+pub use decode::{mp3_decode_count, mp3_decode_raw};
 
 /// Errors from loading sounds or opening the audio device.
 #[derive(Debug)]

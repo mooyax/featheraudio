@@ -34,3 +34,5 @@ jobs:
           ./ctest ../tests/data
       - name: OGG decoder gives the same samples as stb_vorbis
         run: tools/vorbis-check/run.sh tests/data/*.ogg
+      - name: MP3 decoder gives the same samples as minimp3
+        run: tools/mp3-check/run.sh tests/data/*.mp3 tests/data/*.mp2

@@ -11,7 +11,7 @@ Rust だけで書いた、ゲーム向けの羽のように軽いオーディオ
 - **バス**（BGM・効果音・UI など）：まとめて音量・フェード・一時停止できます。
 - **同時発音数の上限**と保護：全部使っているときは、保護されていない一番古い音が場所を譲ります。
 - **トラッカー音楽**（MOD / IT / S3M / XM）：エンジンを内蔵していて、効果音と一緒に混ぜます。形式ごとに feature が分かれているので、使うエンジンだけを入れられます。同じエンジンで [modplay](https://github.com/mooyax/modplay-rs) プレイヤーも動いています。
-- **WAV・OGG Vorbis・MP3**：OGG Vorbis は、stb_vorbis を移植した内蔵のデコーダーで読みます（依存クレートなし）。`Wav` はファイルを全部メモリに展開します（効果音向け）。`Stream` は鳴らしながら少しずつ展開します（BGM 向け。全部展開するとステレオ 1 分で 23 MB になります）。60 秒の曲を展開しながら鳴らしても、CPU は 1 コアの 0.1% ほどです。
+- **WAV・OGG Vorbis・MP3**：どちらのデコーダーも内蔵です（stb_vorbis と minimp3 の移植、依存クレートなし）。MP3 は LAME タグを使って、つなぎ目なくループします。`Wav` はファイルを全部メモリに展開します（効果音向け）。`Stream` は鳴らしながら少しずつ展開します（BGM 向け。全部展開するとステレオ 1 分で 23 MB になります）。60 秒の曲を展開しながら鳴らしても、CPU は 1 コアの 0.1% ほどです。
 - **サンプル単位で正確なタイミング**：`play_clocked` は、1 回の音声バッファの間に鳴らし始めた音を、ゲームの時刻の差のとおりにずらします（バッファの大きさによらず連射の間隔がそろいます）。`PlayOptions::delay` でちょうど N 秒後に鳴らし始められ、`Audio::time()` でエンジンの時計が読めます。
 - **エフェクト**：ローパス・ハイパス・バンドパス・ノッチのフィルタ、エコー、リバーブを、1 つの音にもバス全体にもかけられます（音・バスごとに 4 つまで）。パラメータはなめらかにフェードでき、ポーズ画面で BGM をこもらせるのも 1 行です。`Effect` を実装すれば自作のエフェクトも使えます。バスのエフェクトは、音が鳴り終わった後も余韻が残ります。
 - **簡易 3D 定位**：聞き手（リスナー）と音の位置から、距離による減衰（逆距離・直線・指数）、左右の定位、ドップラー効果を付けます。計算はミキサー側で行うので、ゲームは位置を送るだけです。
@@ -92,7 +92,7 @@ cargo run --release --example bench_fx             # エフェクトと 3D の C
 |---|---|---|
 | `cpal` | 有効 | `Audio::new()`：cpal で既定のデバイスに出力 |
 | `ogg` | 有効 | `Wav` と `Stream` で OGG Vorbis を読む。デコーダーは内蔵で、[stb_vorbis](https://github.com/nothings/stb) を Rust に移したもの（出力は元とビット単位で同じ）— Stream 込みで約 80 KB（以前の lewton では約 130 KB）、速さは lewton の約 1.6 倍 |
-| `mp3` | 有効 | `Wav` と `Stream` で MP3 を読む（minimp3 を Rust に移した [nanomp3](https://crates.io/crates/nanomp3) を使用）— 約 60 KB |
+| `mp3` | 有効 | `Wav` と `Stream` で MP3（と MP2）を読む。デコーダーは内蔵で、[minimp3](https://github.com/lieff/minimp3) を Rust に移したもの（出力は元とビット単位で同じ）。LAME タグにあるエンコーダーの遅延と詰め物を取り除くので、曲の頭と終わりに余計な無音が入りません — 約 65 KB、速さは C の minimp3 と同程度 |
 | `effects` | 有効 | 組み込みエフェクト `Filter`・`Echo`・`Reverb` — 約 10 KB（自作エフェクト用の `Effect` トレイトと 3D は常に入っています） |
 | `tracker` | 有効 | 下の 3 つのトラッカーエンジンすべて |
 | `mod` | （`tracker` で有効） | ProTracker の MOD エンジン。pt2-clone の移植で、出力は元と完全に同じ — 約 45 KB |
@@ -127,7 +127,8 @@ cargo run --release --example bench_fx             # エフェクトと 3D の C
 - [Freeverb](https://ccrma.stanford.edu/~jos/pasp/Freeverb.html)（Jezar 氏 / Dreampoint、パブリックドメイン）— リバーブの構成と数値。フィルタは Robert Bristow-Johnson 氏の Audio EQ Cookbook、距離減衰とドップラー効果は OpenAL の仕様に従っています。
 - [OpenMPT / libopenmpt](https://openmpt.org/) — IT・S3M エンジンの答え合わせの基準です。レゾナンスフィルタや音量の表は OpenMPT に合わせています。
 - [stb_vorbis](https://github.com/nothings/stb)（Sean Barrett 氏、パブリックドメインまたは MIT）— OGG Vorbis のデコーダーはこれを Rust に移したものです（`src/vorbis.rs`）。`tools/vorbis-check` で、元と同じ値が出ることを確かめています。
-- [cpal](https://github.com/RustAudio/cpal) — 音声出力。[nanomp3](https://crates.io/crates/nanomp3)（[minimp3](https://github.com/lieff/minimp3) の移植）— MP3。
+- [minimp3](https://github.com/lieff/minimp3)（lieff 氏ほか、CC0）— MP3 のデコーダーはこれを Rust に移したものです（`src/mp3.rs`）。`tools/mp3-check` で、元と同じ値が出ることを確かめています。
+- [cpal](https://github.com/RustAudio/cpal) — 音声出力。
 
 ## ライセンス
 
