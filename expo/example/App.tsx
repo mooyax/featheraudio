@@ -12,6 +12,7 @@ import * as FA from "./modules/feather-audio/src";
 
 const files = {
   song: require("./sounds/song.mod"),
+  jingle: require("./sounds/jingle.mod"),
   musicOgg: require("./sounds/music_ogg.ogg"),
   musicMp3: require("./sounds/music_mp3.mp3"),
   pew: require("./sounds/pew.wav"),
@@ -142,6 +143,18 @@ export default function App() {
     setMusicVol(v);
     FA.fadeBusVolume(bus.current.music, v, 0.2);
   };
+  const jingle = () => {
+    // a tracker module played once (no loop): it stops by itself at the end of the song
+    const h = FA.play(src.current.jingle!, { bus: bus.current.music });
+    const t0 = FA.time();
+    log("jingle: once (4.8 s)");
+    const watch = setInterval(() => {
+      if (!FA.isPlaying(h)) {
+        clearInterval(watch);
+        log(`jingle ended by itself after ${(FA.time() - t0).toFixed(1)} s`);
+      }
+    }, 100);
+  };
   const toggleMuffle = () => {
     FA.fadeEffectParam(FA.bus(bus.current.music), 0, FA.Param.FILTER_CUTOFF, muffled ? 20000 : 500, 0.4);
     setMuffled(!muffled);
@@ -229,6 +242,7 @@ export default function App() {
           <Row>
             <Btn label="Muffle" on={muffled} off={off} onPress={toggleMuffle} />
             <Btn label="Pause" on={paused} off={off} onPress={togglePause} />
+            <Btn label="Jingle (once)" off={off} onPress={jingle} />
           </Row>
         </Section>
         <Section title="Sound effects">

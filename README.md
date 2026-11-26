@@ -34,7 +34,9 @@ audio.play_clocked(game_time, &pew);               // rapid fire, evenly spaced
 
 let music = audio.create_bus().unwrap();
 let song = Tracker::from_bytes(&std::fs::read("song.xm")?)?;
-let bgm = audio.play_with(&song, PlayOptions::new().bus(music).protected(true));
+let bgm = audio.play_with(&song, PlayOptions::new().bus(music).looping(true).protected(true));
+let jingle = Tracker::from_bytes(&std::fs::read("clear.mod")?)?;
+audio.play_with(&jingle, PlayOptions::new().bus(music)); // once: stops at the end of the song
 
 let theme = Stream::from_vec(std::fs::read("theme.ogg")?)?; // decoded while playing
 audio.play_with(&theme, PlayOptions::new().bus(music).looping(true).delay(1.0));
@@ -75,7 +77,7 @@ mixer.render(&mut buf);
 ```
 cargo run --release --example play -- sound.wav    # play a file on the default device
 cargo run --release --example play -- music.ogg    # OGG / MP3 are streamed
-cargo run --release --example play -- song.it      # modules loop until you press Enter
+cargo run --release --example play -- song.it      # modules play to the end of the song
 cargo run --release --example demo -- [music]      # render a short demo to demo.wav
 cargo run --release --example bench_fx             # CPU cost of effects and 3D
 ```

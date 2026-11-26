@@ -143,6 +143,12 @@ pub struct XmPlayer {
     pub seconds: f64,
     pub muted: Vec<bool>,
     gain: f32,
+    /// stop at the end of the song (see set_stop_at_end) instead of looping
+    stop_at_end: bool,
+    /// the end of the song was reached (with stop_at_end)
+    pub ended: bool,
+    /// rows played since the start (order * 256 + row), to find where the song repeats
+    visited: Vec<bool>,
 }
 
 impl XmPlayer {
@@ -176,6 +182,9 @@ impl XmPlayer {
             seconds: 0.0,
             muted: vec![false; n.max(1)],
             gain: 0.0,
+            stop_at_end: false,
+            ended: false,
+            visited: vec![false; 256 * 256],
         };
         let _ = n;
         // libopenmpt's output level (sample pre-amp 48); the same for both mix levels
@@ -235,6 +244,8 @@ impl XmPlayer {
         self.cur_row = 0;
         self.cur_pattern = self.patt_num;
         self.playing = true;
+        self.ended = false;
+        self.visited.fill(false);
     }
 
     fn pattern_rows(&self, p: usize) -> usize {
@@ -435,18 +446,40 @@ impl XmPlayer {
     fn pattern_loop(&mut self, i: usize, param: u8) {
         let row = self.row as u8;
         let c = &mut self.ch[i];
+        let mut jump = false;
         if param == 0 {
             c.loop_start_row = row;
         } else if c.loop_counter == 0 {
             c.loop_counter = param;
-            self.p_break_pos = c.loop_start_row;
-            self.p_break_flag = true;
+            jump = true;
         } else {
             c.loop_counter -= 1;
-            if c.loop_counter > 0 {
-                self.p_break_pos = c.loop_start_row;
-                self.p_break_flag = true;
-            }
+            jump = c.loop_counter > 0;
+        }
+        if jump {
+            let start = c.loop_start_row;
+            self.p_break_pos = start;
+            self.p_break_flag = true;
+            // the loop plays these rows again: not the end of the song
+            self.unvisit(start as usize, row as usize);
+        }
+    }
+
+    /// Stop at the end of the song instead of looping: when playback comes back to a row it
+    /// has already played (the order list wraps, or a jump goes back), [`Self::ended`] is set
+    /// and the song stops advancing (the notes still sounding go on). Rows repeated by a
+    /// pattern loop do not count.
+    pub fn set_stop_at_end(&mut self, on: bool) {
+        if on && !self.stop_at_end {
+            self.visited.fill(false);
+        }
+        self.stop_at_end = on;
+    }
+
+    fn unvisit(&mut self, from: usize, to: usize) {
+        let base = (self.song_pos & 0xFF) * 256;
+        for r in from..=to.min(255) {
+            self.visited[base + r] = false;
         }
     }
 
@@ -1235,6 +1268,14 @@ impl XmPlayer {
             tick_zero = true;
         }
         let read_new = tick_zero && self.patt_del_time2 == 0;
+        if read_new && self.stop_at_end {
+            let i = (self.song_pos & 0xFF) * 256 + (self.row & 0xFF);
+            if self.visited[i] {
+                self.ended = true;
+                return;
+            }
+            self.visited[i] = true;
+        }
         if read_new {
             self.cur_row = self.row;
             self.cur_pattern = self.patt_num;
@@ -1358,17 +1399,26 @@ impl XmPlayer {
         }
     }
 
-    /// Renders interleaved stereo f32 (about -1..1).
-    pub fn render_f32(&mut self, out: &mut [f32]) {
+    /// Renders interleaved stereo f32 (about -1..1). Returns the frames before the end of the
+    /// song (all of them unless it ends here, 0 if it ended before; with
+    /// [`Self::set_stop_at_end`]); after the end, the notes still sounding are mixed on.
+    pub fn render_f32(&mut self, out: &mut [f32]) -> usize {
         out.fill(0.0);
-        if !self.playing {
-            return;
-        }
         let frames = out.len() / 2;
+        if !self.playing {
+            return frames;
+        }
+        let was_ended = self.ended;
+        let mut end_at = None;
         let mut done = 0;
         while done < frames {
             if self.samples_left == 0 {
-                self.tick_replayer();
+                if !self.ended {
+                    self.tick_replayer();
+                    if self.ended {
+                        end_at = Some(done);
+                    }
+                }
                 self.samples_left = self.samples_per_tick().max(1);
                 self.seconds += self.samples_left as f64 / self.rate as f64;
             }
@@ -1376,6 +1426,11 @@ impl XmPlayer {
             self.mix(&mut out[done * 2..(done + n) * 2]);
             done += n;
             self.samples_left -= n as u32;
+        }
+        if was_ended {
+            0
+        } else {
+            end_at.unwrap_or(frames)
         }
     }
 

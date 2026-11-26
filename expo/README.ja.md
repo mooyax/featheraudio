@@ -41,13 +41,13 @@ FA.init();
 
 const [pewAsset, songAsset] = await Asset.loadAsync([require("./assets/pew.ogg"), require("./assets/song.xm")]);
 const pew = FA.load(pewAsset.localUri!);            // WAV・OGG・MP3・MOD・IT・S3M・XM
-const song = FA.load(songAsset.localUri!);          // 曲は常にループ
+const song = FA.load(songAsset.localUri!);          // 曲も loop を付けなければ 1 回だけ
 
 FA.play(pew);                                       // 鳴らしたら放っておく
 FA.playClocked(performance.now() / 1000, pew);      // 連射しても間隔がそろう
 
 const music = FA.createBus();
-const bgm = FA.play(song, { bus: music, protect: true, volume: 0 });
+const bgm = FA.play(song, { bus: music, loop: true, protect: true, volume: 0 });
 FA.fadeVolume(bgm, 0.8, 1.0);
 
 // ポーズ画面：BGM をこもらせる
@@ -70,7 +70,7 @@ FA.setPosition(drone, [x, 0, z]);                   // 毎フレーム
 
 `example/` は、このモジュールをゲームと同じように `modules/feather-audio` に入れた Expo SDK 57 のアプリです。ゲームの音の使い方に沿って試せます：
 
-- 音楽（音楽用のバス）：トラッカー曲（MOD）・OGG・MP3（鳴らしながら展開）の切り替え、音量、こもらせる（ポーズメニュー風）、一時停止
+- 音楽（音楽用のバス）：トラッカー曲（MOD）・OGG・MP3（鳴らしながら展開）の切り替え、音量、こもらせる（ポーズメニュー風）、一時停止、ジングル（トラッカー曲を 1 回だけ鳴らし、曲の終わりで自然に止まる）
 - 効果音（効果音用のバス）：ピッチと左右を変えながら、連射（20 発＋爆発 4 回：大量の音が重なってもリミッターでノイズが出ないか）、エコー
 - 3D（ヘッドホンで）：車が目の前を通り過ぎる（ドップラー効果）、左・前・右・後ろのチャイム
 - 全体：リバーブ、全部止める

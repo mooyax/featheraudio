@@ -35,7 +35,8 @@ enum Kind {
 /// A tracker module, ready to play: MOD (ProTracker engine), IT and S3M (IT engine) or XM
 /// (FastTracker 2 engine), as far as the matching features are enabled.
 ///
-/// The song loops at its end, which suits background music. Cloning is cheap.
+/// Like the other sources it plays once, to the end of the song (where it would start to
+/// repeat), unless played with `looping` (background music). Cloning is cheap.
 #[derive(Clone)]
 pub struct Tracker {
     data: Arc<[u8]>,
@@ -102,30 +103,41 @@ impl Source for Tracker {
     fn instance(&self, rate: u32) -> Box<dyn Instance> {
         // the file was checked in from_bytes, so loading it again cannot fail
         let d = &self.data[..];
-        let inst: Option<Box<dyn Instance>> = match self.kind {
+        let engine: Option<Engine> = match self.kind {
             #[cfg(feature = "xm")]
             Kind::Xm => xm::format::load(d).ok().map(|m| {
                 let mut p = xm::XmPlayer::new(m, rate);
                 p.play_from(0);
-                Box::new(XmInstance(p)) as Box<dyn Instance>
+                Engine::Xm(Box::new(p))
             }),
             #[cfg(feature = "it")]
             Kind::It => it::ItModule::load_any(d).ok().map(|m| {
                 let mut p = it::ItPlayer::new(m, rate);
                 p.play_from(0);
-                Box::new(ItInstance(p)) as Box<dyn Instance>
+                Engine::It(Box::new(p))
             }),
             #[cfg(feature = "mod")]
             Kind::Mod => protracker::Module::load(d, protracker::module::DEFAULT_MAX_SAMPLE_LENGTH).ok().map(|m| {
                 let cfg = protracker::EngineConfig { output_rate: rate, stereo_separation: self.stereo_separation, ..Default::default() };
                 let mut e = protracker::Engine::new(m, cfg);
                 e.play_song();
-                Box::new(ModInstance { engine: e, buf: vec![0; 4096] }) as Box<dyn Instance>
+                Engine::Mod(Box::new(e), vec![0; 4096])
             }),
         };
-        inst.unwrap_or_else(|| Box::new(Silent))
+        match engine {
+            Some(engine) => {
+                let mut i = TrackerInstance { engine, fade: (rate as f32 * END_FADE_SECONDS) as usize, fade_left: None };
+                // like the other sources: once through, unless asked to loop
+                i.set_looping(false);
+                Box::new(i)
+            }
+            None => Box::new(Silent),
+        }
     }
 }
+
+/// after the end of a song that does not loop, the notes still sounding fade out this fast
+const END_FADE_SECONDS: f32 = 0.02;
 
 struct Silent;
 
@@ -135,47 +147,93 @@ impl Instance for Silent {
     }
 }
 
-#[cfg(feature = "xm")]
-struct XmInstance(xm::XmPlayer);
-
-#[cfg(feature = "xm")]
-impl Instance for XmInstance {
-    fn render(&mut self, out: &mut [f32]) -> usize {
-        self.0.render_f32(out);
-        out.len() / 2
-    }
+enum Engine {
+    #[cfg(feature = "xm")]
+    Xm(Box<xm::XmPlayer>),
+    #[cfg(feature = "it")]
+    It(Box<it::ItPlayer>),
+    /// with the 16-bit output of the engine, converted to float
+    #[cfg(feature = "mod")]
+    Mod(Box<protracker::Engine>, Vec<i16>),
 }
 
-#[cfg(feature = "it")]
-struct ItInstance(it::ItPlayer);
-
-#[cfg(feature = "it")]
-impl Instance for ItInstance {
+impl Engine {
+    /// Fills `out`; returns the frames before the end of the song (see the engines' render).
     fn render(&mut self, out: &mut [f32]) -> usize {
-        self.0.render_f32(out);
-        out.len() / 2
-    }
-}
-
-#[cfg(feature = "mod")]
-struct ModInstance {
-    engine: protracker::Engine,
-    /// 16-bit output of the engine, converted to float
-    buf: Vec<i16>,
-}
-
-#[cfg(feature = "mod")]
-impl Instance for ModInstance {
-    fn render(&mut self, out: &mut [f32]) -> usize {
-        // in pieces of at most the scratch size: no allocation on the audio thread
-        for chunk in out.chunks_mut(self.buf.len()) {
-            let b = &mut self.buf[..chunk.len()];
-            self.engine.render(b);
-            for (o, &s) in chunk.iter_mut().zip(b.iter()) {
-                *o = s as f32 / 32768.0;
+        match self {
+            #[cfg(feature = "xm")]
+            Engine::Xm(p) => p.render_f32(out),
+            #[cfg(feature = "it")]
+            Engine::It(p) => p.render_f32(out),
+            #[cfg(feature = "mod")]
+            Engine::Mod(e, buf) => {
+                // in pieces of at most the scratch size: no allocation on the audio thread
+                let mut before_end = 0;
+                let mut ended = e.ended;
+                for chunk in out.chunks_mut(buf.len()) {
+                    let b = &mut buf[..chunk.len()];
+                    let n = e.render(b);
+                    if !ended {
+                        before_end += n;
+                        ended = n < chunk.len() / 2;
+                    }
+                    for (o, &s) in chunk.iter_mut().zip(b.iter()) {
+                        *o = s as f32 / 32768.0;
+                    }
+                }
+                before_end
             }
         }
-        out.len() / 2
+    }
+
+    fn set_stop_at_end(&mut self, on: bool) {
+        match self {
+            #[cfg(feature = "xm")]
+            Engine::Xm(p) => p.set_stop_at_end(on),
+            #[cfg(feature = "it")]
+            Engine::It(p) => p.set_stop_at_end(on),
+            #[cfg(feature = "mod")]
+            Engine::Mod(e, _) => e.set_stop_at_end(on),
+        }
+    }
+}
+
+struct TrackerInstance {
+    engine: Engine,
+    fade: usize,
+    /// after the end of the song: frames of the fade-out still to go
+    fade_left: Option<usize>,
+}
+
+impl Instance for TrackerInstance {
+    fn render(&mut self, out: &mut [f32]) -> usize {
+        let frames = out.len() / 2;
+        if self.fade_left == Some(0) {
+            return 0;
+        }
+        let n = self.engine.render(out);
+        let start = match self.fade_left {
+            Some(_) => 0,
+            None if n < frames => {
+                self.fade_left = Some(self.fade);
+                n
+            }
+            None => return frames,
+        };
+        // the rest of the buffer holds the notes still sounding: fade them out
+        let left = self.fade_left.unwrap_or(0);
+        let k = left.min(frames - start);
+        for (j, f) in out[start * 2..(start + k) * 2].chunks_exact_mut(2).enumerate() {
+            let g = (left - j) as f32 / (self.fade.max(1) as f32);
+            f[0] *= g;
+            f[1] *= g;
+        }
+        self.fade_left = Some(left - k);
+        start + k
+    }
+
+    fn set_looping(&mut self, looping: bool) {
+        self.engine.set_stop_at_end(!looping);
     }
 }
 
@@ -218,5 +276,83 @@ pub(crate) mod tests {
         assert_eq!(i.render(&mut out), 4800);
         assert!(out.iter().any(|x| x.abs() > 0.05), "module should not be silent");
         assert!(Tracker::from_bytes(b"definitely not a module").is_err());
+    }
+}
+
+#[cfg(all(test, feature = "mod", feature = "it", feature = "xm"))]
+mod end_tests {
+    use super::*;
+
+    /// Frames until the instance finishes (or `max` seconds), at 48 kHz.
+    fn length(file: &str, looping: bool, max: f32) -> usize {
+        let data = std::fs::read(format!("{}/tests/data/{file}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let mut i = Tracker::from_bytes(&data).unwrap().instance(48000);
+        i.set_looping(looping);
+        let mut out = vec![0.0; 960 * 2];
+        let mut total = 0;
+        while total < (max * 48000.0) as usize {
+            let n = i.render(&mut out);
+            total += n;
+            if n < 960 {
+                break;
+            }
+        }
+        total
+    }
+
+    // the song in tests/data/loop-end.* (made by make-modules.py): 40 rows of 0.12 s with a
+    // pattern loop inside (XM: 36, FastTracker 2 plays its loop once less, as libopenmpt does),
+    // then 20 ms of fade-out
+    #[test]
+    fn songs_end_where_they_would_repeat() {
+        for (f, secs) in [("loop-end.mod", 4.82), ("loop-end.it", 4.82), ("loop-end.xm", 4.34)] {
+            let n = length(f, false, 20.0) as f32 / 48000.0;
+            assert!((n - secs).abs() < 0.002, "{f}: {n} s, not {secs}");
+        }
+    }
+
+    #[test]
+    fn looping_songs_go_on() {
+        for f in ["loop-end.mod", "loop-end.it", "loop-end.xm"] {
+            assert_eq!(length(f, true, 12.0), 12 * 48000, "{f}");
+        }
+    }
+
+    #[test]
+    fn the_end_fades_out_and_play_from_the_start_again() {
+        for f in ["loop-end.mod", "loop-end.it", "loop-end.xm"] {
+            let data = std::fs::read(format!("{}/tests/data/{f}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+            let t = Tracker::from_bytes(&data).unwrap();
+            let mut i = t.instance(48000);
+            let mut out = vec![0.0; 48000 * 2 * 6];
+            let n = i.render(&mut out);
+            let s = &out[..n * 2];
+            // sound right up to the fade, which ends near silence
+            let before = &s[s.len() - 960 * 2 * 2..s.len() - 960 * 2];
+            assert!(before.iter().any(|x| x.abs() > 0.05), "{f}: sound before the end");
+            assert!(s[s.len() - 2..].iter().all(|x| x.abs() < 0.01), "{f}: faded out");
+            assert_eq!(i.render(&mut out[..1920]), 0, "{f}: finished");
+            // a new instance starts over
+            let mut j = t.instance(48000);
+            assert_eq!(j.render(&mut out), n, "{f}: the same length again");
+        }
+    }
+
+    #[test]
+    fn a_song_played_once_ends_its_voice() {
+        let data = std::fs::read(format!("{}/tests/data/loop-end.mod", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let t = Tracker::from_bytes(&data).unwrap();
+        let (a, mut m) = crate::Audio::with_manual_output(48000);
+        let once = a.play(&t);
+        let looped = a.play_with(&t, crate::PlayOptions::new().looping(true));
+        let mut out = vec![0.0; 48000 * 2 * 6];
+        m.render(&mut out);
+        assert!(!a.is_playing(once), "ends after 4.8 s");
+        assert!(a.is_playing(looped), "loops");
+        // looping can be turned off while it plays: it then stops at the end of the song
+        a.set_looping(looped, false);
+        let mut out = vec![0.0; 48000 * 2 * 6];
+        m.render(&mut out);
+        assert!(!a.is_playing(looped), "stopped at the next end");
     }
 }

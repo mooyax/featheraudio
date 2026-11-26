@@ -8,6 +8,9 @@ files are free to use. Needs numpy and ffmpeg (for the OGG and MP3 music).
 - music_ogg.ogg an arpeggio loop as OGG Vorbis, streamed by the app
 - music_mp3.mp3 the same loop as MP3 (LAME tag: loops without a gap)
 - pew.wav, coin.wav, boom.wav, chime.wav, engine.wav  sound effects (engine loops, for 3D)
+
+(jingle.mod, a 4.8 s module played once, is tests/data/loop-end.mod, made by
+tests/data/make-modules.py.)
 """
 import os
 import struct

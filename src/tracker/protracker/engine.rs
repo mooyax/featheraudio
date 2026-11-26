@@ -64,6 +64,12 @@ pub struct Engine {
     ds_r: Downsample2x,
     mix_l: Vec<f32>,
     mix_r: Vec<f32>,
+    /// stop at the end of the song (see set_stop_at_end) instead of looping
+    stop_at_end: bool,
+    /// the end of the song was reached (with stop_at_end)
+    pub ended: bool,
+    /// the replayer found the end during the tick being mixed: it ends after this tick
+    end_pending: bool,
 }
 
 impl Engine {
@@ -93,6 +99,9 @@ impl Engine {
             ds_r: Downsample2x::default(),
             mix_l: Vec::new(),
             mix_r: Vec::new(),
+            stop_at_end: false,
+            ended: false,
+            end_pending: false,
         };
         e.rep.enable_e8x = cfg.enable_e8x;
         e.rep.timing_mode = cfg.timing_mode;
@@ -204,15 +213,41 @@ impl Engine {
         self.mix_r = mix_r;
     }
 
+    /// Stop at the end of the song instead of looping, with pt2-clone's MOD2WAV end detection:
+    /// when the song comes back to a row it has already played (the order list wraps, or a
+    /// jump goes back) or stops (F00), [`Self::ended`] is set and the song stops advancing
+    /// (the notes still sounding go on). Rows repeated by a pattern loop (E6x) do not count.
+    pub fn set_stop_at_end(&mut self, on: bool) {
+        if on && !self.stop_at_end {
+            self.rep.row_visit_table.fill(false);
+        }
+        self.stop_at_end = on;
+        self.rep.mod2wav_ongoing = on;
+    }
+
     /// Real-time style rendering (what the SDL audio callback does):
-    /// fills `stream` (interleaved stereo i16), ticking the replayer as needed.
-    pub fn render(&mut self, stream: &mut [i16]) {
-        let mut samples_left = stream.len() / 2;
+    /// fills `stream` (interleaved stereo i16), ticking the replayer as needed. Returns the
+    /// frames before the end of the song (all of them unless it ends here, 0 if it ended
+    /// before; with [`Self::set_stop_at_end`]); after the end, the notes still sounding are
+    /// mixed on.
+    pub fn render(&mut self, stream: &mut [i16]) -> usize {
+        let frames = stream.len() / 2;
+        let was_ended = self.ended;
+        let mut end_at = None;
+        let mut samples_left = frames;
         let mut pos = 0usize;
         while samples_left > 0 {
             if self.audio.tick_sample_counter <= 0 {
-                if self.rep.song_playing {
-                    self.tick_replayer();
+                if self.end_pending && !self.ended {
+                    // the last tick of the song has been mixed
+                    self.ended = true;
+                    end_at = Some(pos);
+                } else if self.rep.song_playing && !self.ended {
+                    // the end check comes on the last tick of the last row, which still plays
+                    let more = self.tick_replayer();
+                    if self.stop_at_end && (!more || !self.rep.song_playing) {
+                        self.end_pending = true;
+                    }
                 }
                 self.audio.tick_sample_counter = self.audio.samples_per_tick_int as i32;
                 self.audio.tick_sample_counter_frac += self.audio.samples_per_tick_frac;
@@ -232,10 +267,18 @@ impl Engine {
             self.audio.tick_sample_counter -= to_mix as i32;
             samples_left -= to_mix;
         }
+        if was_ended {
+            0
+        } else {
+            end_at.unwrap_or(frames)
+        }
     }
 
     /// Starts normal song playback from order 0 (for real-time playback).
     pub fn play_song(&mut self) {
+        self.ended = false;
+        self.end_pending = false;
+        self.rep.row_visit_table.fill(false);
         self.rep.play_mode = super::replayer::PlayMode::Normal;
         self.mod_play(-1, 0, 0);
     }

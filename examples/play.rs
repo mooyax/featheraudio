@@ -2,7 +2,7 @@
 //!
 //!     cargo run --release --example play -- sound.wav
 //!     cargo run --release --example play -- music.ogg     (or .mp3: streamed while playing)
-//!     cargo run --release --example play -- song.xm       (MOD / IT / S3M / XM: loops)
+//!     cargo run --release --example play -- song.xm       (MOD / IT / S3M / XM: to the end of the song)
 //!
 //! Press Enter to fade out and stop.
 

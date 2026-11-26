@@ -87,7 +87,8 @@ double fa_time(const FaAudio *audio);
 /* ---------- sources ---------- */
 
 /* WAV / OGG / MP3 decoded into memory (sound effects), or a tracker module (MOD / IT / S3M /
-   XM, always loops). The data is copied. NULL if the format is unknown. */
+   XM: like the others, played once to the end of the song unless played with looping). The
+   data is copied. NULL if the format is unknown. */
 FaSource *fa_source_load(const void *data, size_t len);
 /* OGG / MP3 decoded while playing (music). The data is copied. */
 FaSource *fa_source_stream(const void *data, size_t len);

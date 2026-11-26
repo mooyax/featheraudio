@@ -176,6 +176,12 @@ pub struct ItPlayer {
     /// output gain applied in the mixer
     pub master_gain: f32,
     ramp_step: f32,
+    /// stop at the end of the song (see set_stop_at_end) instead of looping
+    stop_at_end: bool,
+    /// the end of the song was reached (with stop_at_end)
+    pub ended: bool,
+    /// rows played since the start (order * 256 + row), to find where the song repeats
+    visited: Vec<bool>,
 }
 
 /// 8363 * 1712: period <-> frequency constant for Amiga-style periods
@@ -213,7 +219,11 @@ impl ItPlayer {
             rng: 0x1234_5678,
             master_gain: 1.0,
             ramp_step: 1.0 / (rate as f32 * 0.0015).max(1.0),
+            stop_at_end: false,
+            ended: false,
+            visited: Vec::new(),
         };
+        p.visited = vec![false; p.m.orders.len().max(1) * 256];
         p.reset(0);
         p
     }
@@ -235,6 +245,8 @@ impl ItPlayer {
 
     /// Resets the song state and positions playback at `order`.
     pub fn reset(&mut self, order: usize) {
+        self.ended = false;
+        self.visited.fill(false);
         self.speed = self.m.speed as u32;
         self.tempo = self.m.tempo as u32;
         self.global_vol = self.m.global_vol as i32;
@@ -391,7 +403,19 @@ impl ItPlayer {
                 self.extra_ticks = 0;
                 self.advance_row();
                 if !self.playing {
+                    // the order list has no more patterns: the song is over
+                    self.ended |= self.stop_at_end;
                     return;
+                }
+                if self.stop_at_end {
+                    let i = self.order * 256 + self.row.min(255);
+                    if self.visited.get(i).copied().unwrap_or(false) {
+                        self.ended = true;
+                        return;
+                    }
+                    if let Some(v) = self.visited.get_mut(i) {
+                        *v = true;
+                    }
                 }
                 self.process_row(false);
             }
@@ -1440,6 +1464,13 @@ impl ItPlayer {
                     self.chn[ch].loop_count = x;
                 }
                 self.loop_jump = Some(self.chn[ch].loop_row);
+                // the loop plays these rows again: not the end of the song
+                let base = self.order * 256;
+                for r in self.chn[ch].loop_row..=row.min(255) {
+                    if let Some(v) = self.visited.get_mut(base + r) {
+                        *v = false;
+                    }
+                }
                 // IT: SBx wins over a position jump to its left
                 if self.m.format != Format::S3m {
                     self.jump_order = None;
@@ -1697,15 +1728,34 @@ impl ItPlayer {
     // mixing
     // ------------------------------------------------------------------
 
-    /// Renders interleaved stereo f32 samples (unclipped), advancing the song.
-    pub fn render_f32(&mut self, out: &mut [f32]) {
+    /// Stop at the end of the song instead of looping: when playback comes back to a row it
+    /// has already played (the order list wraps, or a jump goes back) or runs out of
+    /// patterns, [`Self::ended`] is set and the song stops advancing (the notes still
+    /// sounding go on). Rows repeated by a pattern loop do not count.
+    pub fn set_stop_at_end(&mut self, on: bool) {
+        if on && !self.stop_at_end {
+            self.visited.fill(false);
+        }
+        self.stop_at_end = on;
+    }
+
+    /// Renders interleaved stereo f32 samples (unclipped), advancing the song. Returns the
+    /// frames before the end of the song (all of them unless it ends here, 0 if it ended
+    /// before; with [`Self::set_stop_at_end`]); after the end, the notes still sounding are
+    /// mixed on.
+    pub fn render_f32(&mut self, out: &mut [f32]) -> usize {
         out.fill(0.0);
         let frames = out.len() / 2;
+        let was_ended = self.ended;
+        let mut end_at = None;
         let mut done = 0;
         while done < frames {
             if self.samples_to_tick <= 0.0 {
-                if self.playing {
+                if self.playing && !self.ended {
                     self.process_tick();
+                    if self.ended {
+                        end_at = Some(done);
+                    }
                 }
                 let spt = ((self.rate as u64 * 5) / (self.tempo.max(1) as u64 * 2)).max(1) as f64;
                 self.samples_to_tick += spt;
@@ -1717,6 +1767,11 @@ impl ItPlayer {
             self.mix(&mut out[done * 2..(done + n) * 2]);
             self.samples_to_tick -= n as f64;
             done += n;
+        }
+        if was_ended {
+            0
+        } else {
+            end_at.unwrap_or(frames)
         }
     }
 

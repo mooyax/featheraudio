@@ -40,13 +40,13 @@ FA.init();
 
 const [pewAsset, songAsset] = await Asset.loadAsync([require("./assets/pew.ogg"), require("./assets/song.xm")]);
 const pew = FA.load(pewAsset.localUri!);            // WAV / OGG / MP3 / MOD / IT / S3M / XM
-const song = FA.load(songAsset.localUri!);          // modules always loop
+const song = FA.load(songAsset.localUri!);          // modules too: once, unless played with loop
 
 FA.play(pew);                                       // fire and forget
 FA.playClocked(performance.now() / 1000, pew);      // rapid fire, evenly spaced
 
 const music = FA.createBus();
-const bgm = FA.play(song, { bus: music, protect: true, volume: 0 });
+const bgm = FA.play(song, { bus: music, loop: true, protect: true, volume: 0 });
 FA.fadeVolume(bgm, 0.8, 1.0);
 
 // pause menu: muffle the music
@@ -69,7 +69,7 @@ Long music in OGG / MP3: `FA.stream(uri)` decodes while playing and uses little 
 
 `example/` is an Expo SDK 57 app with this module in `modules/feather-audio`, as in a game, laid out like a game's audio:
 
-- music (on a music bus): a tracker module (MOD), OGG or MP3 (streamed), volume, muffle (a pause menu), pause
+- music (on a music bus): a tracker module (MOD), OGG or MP3 (streamed), volume, muffle (a pause menu), pause, a jingle (a tracker module played once: it stops by itself at the end of the song)
 - sound effects (on an effects bus): varied pitch and pan, rapid fire (20 shots and 4 explosions: many loud sounds at once, kept from crackling by the limiter), echo
 - 3D (with headphones): a car driving past (Doppler shift), chimes left, in front, right and behind
 - everything: reverb, stop all

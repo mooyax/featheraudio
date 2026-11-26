@@ -34,7 +34,9 @@ audio.play_clocked(game_time, &pew);               // 連射しても間隔が�
 
 let music = audio.create_bus().unwrap();
 let song = Tracker::from_bytes(&std::fs::read("song.xm")?)?;
-let bgm = audio.play_with(&song, PlayOptions::new().bus(music).protected(true));
+let bgm = audio.play_with(&song, PlayOptions::new().bus(music).looping(true).protected(true));
+let jingle = Tracker::from_bytes(&std::fs::read("clear.mod")?)?;
+audio.play_with(&jingle, PlayOptions::new().bus(music)); // 1 回だけ：曲の終わりで止まる
 
 let theme = Stream::from_vec(std::fs::read("theme.ogg")?)?; // 鳴らしながら展開
 audio.play_with(&theme, PlayOptions::new().bus(music).looping(true).delay(1.0));
@@ -75,7 +77,7 @@ mixer.render(&mut buf);
 ```
 cargo run --release --example play -- sound.wav    # ファイルを既定のデバイスで鳴らす
 cargo run --release --example play -- music.ogg    # OGG・MP3 は鳴らしながら展開
-cargo run --release --example play -- song.it      # 曲は Enter を押すまでループ
+cargo run --release --example play -- song.it      # 曲は最後まで鳴らして終了
 cargo run --release --example demo -- [music]      # 短いデモを demo.wav に書き出す
 cargo run --release --example bench_fx             # エフェクトと 3D の CPU 負荷を測る
 ```
