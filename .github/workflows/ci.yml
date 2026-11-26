@@ -1,0 +1,34 @@
+# Tests the library with several feature sets, and the C API with a C program.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            capi
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - run: cargo test
+      - run: cargo test --no-default-features
+      - run: cargo test --no-default-features --features effects
+      - run: cargo test --no-default-features --features ogg,mp3
+      - run: cargo test --no-default-features --features xm
+      - run: cargo clippy --all-targets -- -D warnings
+      - name: C API
+        working-directory: capi
+        run: |
+          cargo build --release
+          cc -std=c99 -Wall -Wextra -Werror -Iinclude tests/test.c target/release/libfeatheraudio.a -lm -ldl -lpthread -o ctest
+          ./ctest ../tests/data

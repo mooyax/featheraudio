@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>featheraudio — demo (Rust / WebAssembly)</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #111318; --panel: #191c23; --line: #2a2f3a; --text: #d9dee7; --dim: #8a93a3;
+    --accent: #7fd1b9; --warm: #f2b56b; --pink: #e98aa8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 22px 28px 6px; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: .3px; }
+  header h1 span { color: var(--accent); }
+  header p { margin: 0; color: var(--dim); }
+  header a { color: var(--accent); }
+  main { display: grid; grid-template-columns: minmax(320px, 560px) minmax(280px, 400px); gap: 20px; padding: 16px 28px 28px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); }
+  .stack { display: grid; gap: 14px; }
+  canvas { width: 100%; aspect-ratio: 1 / 1; display: block; border-radius: 8px; background: #0c0e12; cursor: crosshair; touch-action: none; }
+  .hint { color: var(--dim); font-size: 12.5px; margin: 8px 2px 0; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+  .row label { min-width: 92px; color: var(--dim); }
+  button { background: #232833; color: var(--text); border: 1px solid #343b49; border-radius: 7px; padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.on { background: #1d3a33; border-color: var(--accent); color: #c9f2e6; }
+  input[type=range] { flex: 1; accent-color: var(--accent); min-width: 120px; }
+  input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+  .drop { border: 1.5px dashed #3a4250; border-radius: 8px; padding: 12px; text-align: center; color: var(--dim); }
+  .drop.over { border-color: var(--accent); color: var(--text); }
+  #status { color: var(--warm); min-height: 1.5em; font-size: 13px; }
+  .stats { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; font-variant-numeric: tabular-nums; }
+  .stats span:nth-child(odd) { color: var(--dim); }
+  #start { position: fixed; inset: 0; background: rgba(10,12,16,.88); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  #start button { font-size: 17px; padding: 14px 26px; border-color: var(--accent); }
+  #start p { color: var(--dim); text-align: center; }
+  footer { color: var(--dim); padding: 0 28px 28px; font-size: 12.5px; max-width: 980px; }
+  code { background: #232833; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="start"><div style="text-align:center">
+  <button id="startBtn">▶ Start audio</button>
+  <p id="loadMsg">Loading the engine…</p>
+</div></div>
+
+<header>
+  <h1><span>feather</span>audio</h1>
+  <p>A feather-light game audio engine in Rust, running here as WebAssembly. · <a href="https://github.com/mooyax/featheraudio">GitHub</a></p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>3D sound — you are in the middle, facing up</h2>
+    <canvas id="field" width="560" height="560"></canvas>
+    <p class="hint">Click anywhere to ring a chime there: it gets quieter with distance and pans to its side. Turn on the car to hear it drive past with the Doppler shift. Use headphones.</p>
+  </section>
+
+  <div class="stack">
+    <section class="card">
+      <h2>Music</h2>
+      <div class="row">
+        <button id="musicBtn">Play built-in music</button>
+        <button id="stopMusic">Stop</button>
+      </div>
+      <div class="drop" id="drop">Drop a file here, or <button id="pick">choose one</button><br>
+        <small>OGG · MP3 (streamed) · WAV · MOD · IT · S3M · XM</small></div>
+      <input id="file" type="file" hidden accept=".ogg,.mp3,.wav,.mod,.it,.s3m,.xm">
+      <div id="status"></div>
+      <div class="row"><label>Volume</label><input id="musicVol" type="range" min="0" max="1" step="0.01" value="0.8"></div>
+      <div class="row"><label>Pause menu</label><button id="muffle">Muffle the music</button></div>
+    </section>
+
+    <section class="card">
+      <h2>Sound effects</h2>
+      <div class="row">
+        <button id="pewBtn">Pew</button>
+        <button id="burstBtn">Rapid fire</button>
+        <button id="carBtn">Car</button>
+      </div>
+      <p class="hint" style="margin-top:0">Rapid fire uses <code>play_clocked</code>: shots keep even spacing even though each audio buffer here is about 45 ms long.</p>
+    </section>
+
+    <section class="card">
+      <h2>Effects</h2>
+      <div class="row"><label><input id="reverb" type="checkbox"> Reverb</label><input id="room" type="range" min="0" max="1" step="0.01" value="0.6" title="room size"></div>
+      <div class="row"><label><input id="echo" type="checkbox"> Echo</label><span class="hint" style="margin:0">on the sound effects</span></div>
+      <div class="row"><label>Master</label><input id="master" type="range" min="0" max="1" step="0.01" value="0.9"></div>
+    </section>
+
+    <section class="card">
+      <h2>Engine</h2>
+      <div class="stats">
+        <span>Voices</span><span id="voices">0</span>
+        <span>Sample rate</span><span id="rate">–</span>
+        <span>Engine clock</span><span id="clock">0.0 s</span>
+        <span>Mixing cost</span><span id="cpu">–</span>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  Everything you hear is mixed by featheraudio in this page: the music bus has a low-pass filter (the "pause menu" fades its cutoff), the effects bus an echo, the main bus a reverb, and every bus flows into the main one.
+  The sounds are generated in code, so the page needs no audio files.
+</footer>
+
+<script src="featheraudio_web.js"></script>
+<script>
+const WASM = "featheraudio_web_bg.wasm";
+(async () => {
+  const $ = (id) => document.getElementById(id);
+  await wasm_bindgen({ module_or_path: WASM });
+  $("loadMsg").textContent = "Click to start (browsers only play sound after a click).";
+
+  let ctx, demo, node;
+  let renderMs = 0, bufferMs = 1;
+
+  function startAudio() {
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
+    demo = new wasm_bindgen.Demo(ctx.sampleRate);
+    // ScriptProcessorNode keeps the demo simple (the mixer runs on the page's thread)
+    node = ctx.createScriptProcessor(2048, 0, 2);
+    bufferMs = 2048 / ctx.sampleRate * 1000;
+    node.onaudioprocess = (e) => {
+      const t0 = performance.now();
+      const l = e.outputBuffer.getChannelData(0), r = e.outputBuffer.getChannelData(1);
+      demo.render(l, r);
+      renderMs = renderMs * 0.9 + (performance.now() - t0) * 0.1;
+    };
+    node.connect(ctx.destination);
+    $("rate").textContent = ctx.sampleRate + " Hz";
+    demo.set_music_volume(+$("musicVol").value);
+    demo.set_master_volume(+$("master").value);
+    demo.play_builtin_music();
+    $("musicBtn").classList.add("on");
+    $("start").remove();
+  }
+  $("startBtn").onclick = startAudio;
+
+  const status = (s) => $("status").textContent = s;
+
+  // ---- music ----
+  $("musicBtn").onclick = () => { demo.play_builtin_music(); status("Built-in music"); $("musicBtn").classList.add("on"); };
+  $("stopMusic").onclick = () => { demo.stop_music(); status(""); $("musicBtn").classList.remove("on"); };
+  $("musicVol").oninput = (e) => demo.set_music_volume(+e.target.value);
+  let muffled = false;
+  $("muffle").onclick = (e) => {
+    muffled = !muffled;
+    demo.muffle_music(muffled ? 500 : 20000);
+    e.target.classList.toggle("on", muffled);
+  };
+  async function playFile(f) {
+    try {
+      const what = demo.play_file(new Uint8Array(await f.arrayBuffer()));
+      status(`${f.name} — ${what}`);
+      $("musicBtn").classList.remove("on");
+    } catch (err) {
+      status(`${f.name}: ${err.message || err}`);
+    }
+  }
+  $("pick").onclick = () => $("file").click();
+  $("file").onchange = (e) => { if (e.target.files[0]) playFile(e.target.files[0]); e.target.value = ""; };
+  const drop = $("drop");
+  ["dragenter", "dragover"].forEach((t) => document.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((t) => document.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  document.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f && demo) playFile(f); });
+
+  // ---- sound effects ----
+  $("pewBtn").onclick = () => demo.pew(Math.random() * 1.6 - 0.8, 0.9 + Math.random() * 0.4);
+  $("burstBtn").onclick = () => {
+    let k = 0;
+    const id = setInterval(() => {
+      demo.pew_clocked(performance.now() / 1000, Math.sin(k * 0.7) * 0.8);
+      if (++k >= 12) clearInterval(id);
+    }, 60);
+  };
+
+  // ---- effects ----
+  $("reverb").onchange = (e) => demo.set_reverb(e.target.checked, +$("room").value);
+  $("room").oninput = (e) => { if ($("reverb").checked) demo.set_reverb_room(+e.target.value); };
+  $("echo").onchange = (e) => demo.set_echo(e.target.checked);
+  $("master").oninput = (e) => demo.set_master_volume(+e.target.value);
+
+  // ---- the 3D field: world units are metres, 30 m from the centre to the edge ----
+  const cv = $("field"), g = cv.getContext("2d");
+  const R = 30;
+  const toWorld = (px, py) => [(px / cv.width - 0.5) * 2 * R, (py / cv.height - 0.5) * 2 * R];
+  const toPx = (x, z) => [(x / (2 * R) + 0.5) * cv.width, (z / (2 * R) + 0.5) * cv.height];
+  const rings = []; // chimes: {x, z, t0}
+  cv.addEventListener("pointerdown", (e) => {
+    if (!demo) return;
+    const r = cv.getBoundingClientRect();
+    const [x, z] = toWorld((e.clientX - r.left) / r.width * cv.width, (e.clientY - r.top) / r.height * cv.height);
+    // higher up the field, higher the pitch
+    demo.chime_at(x, z, 1.25 - (z + R) / (2 * R) * 0.5);
+    rings.push({ x, z, t0: performance.now() });
+  });
+
+  // the car: drives left to right 6 m in front of you at 25 m/s, again and again
+  let car = 0, carX = -R * 2;
+  const carZ = -6, carV = 25;
+  $("carBtn").onclick = (e) => {
+    if (car) { demo.stop(car); car = 0; e.target.classList.remove("on"); return; }
+    carX = -R * 2;
+    car = demo.start_engine(carX, carZ);
+    demo.set_velocity(car, carV, 0);
+    e.target.classList.add("on");
+  };
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+    if (car) {
+      carX += carV * dt;
+      if (carX > R * 2) carX = -R * 2;
+      demo.set_position(car, carX, carZ);
+    }
+    draw(now);
+    if (demo) {
+      $("voices").textContent = demo.active_voices();
+      $("clock").textContent = demo.time().toFixed(1) + " s";
+      $("cpu").textContent = `${renderMs.toFixed(2)} ms per ${bufferMs.toFixed(0)} ms buffer (${(renderMs / bufferMs * 100).toFixed(1)}%)`;
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function draw(now) {
+    const w = cv.width, h = cv.height;
+    g.clearRect(0, 0, w, h);
+    // distance rings every 10 m
+    g.strokeStyle = "#1f242d"; g.lineWidth = 1;
+    for (let d = 10; d <= 40; d += 10) {
+      g.beginPath(); g.arc(w / 2, h / 2, d / (2 * R) * w, 0, Math.PI * 2); g.stroke();
+    }
+    g.fillStyle = "#3a4250"; g.font = "11px system-ui";
+    for (let d = 10; d <= 20; d += 10) g.fillText(d + " m", w / 2 + 4, h / 2 - d / (2 * R) * h - 4);
+    // the road
+    const [, roadY] = toPx(0, carZ);
+    g.strokeStyle = "#262c36"; g.lineWidth = 18; g.beginPath(); g.moveTo(0, roadY); g.lineTo(w, roadY); g.stroke();
+    // chimes: expanding rings
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const r = rings[i], age = (now - r.t0) / 1000;
+      if (age > 1.2) { rings.splice(i, 1); continue; }
+      const [px, py] = toPx(r.x, r.z);
+      g.strokeStyle = `rgba(242,181,107,${1 - age / 1.2})`; g.lineWidth = 2;
+      g.beginPath(); g.arc(px, py, 6 + age * 40, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = "#f2b56b"; g.beginPath(); g.arc(px, py, 4, 0, Math.PI * 2); g.fill();
+    }
+    // the car
+    if (car) {
+      const [px, py] = toPx(carX, carZ);
+      g.fillStyle = "#e98aa8"; g.beginPath(); g.roundRect(px - 12, py - 6, 24, 12, 4); g.fill();
+    }
+    // the listener: a head with a nose pointing up (-z)
+    g.fillStyle = "#7fd1b9";
+    g.beginPath(); g.arc(w / 2, h / 2, 9, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.moveTo(w / 2 - 5, h / 2 - 7); g.lineTo(w / 2, h / 2 - 17); g.lineTo(w / 2 + 5, h / 2 - 7); g.fill();
+    g.fillStyle = "#5aa893";
+    g.fillRect(w / 2 - 13, h / 2 - 4, 4, 8); g.fillRect(w / 2 + 9, h / 2 - 4, 4, 8);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

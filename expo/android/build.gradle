@@ -1,0 +1,31 @@
+// featheraudio for Expo (Android): the JNI bridge and libfeatheraudio.a, built with CMake
+// (src/main/cpp/CMakeLists.txt). Build the .a files first with expo/build-mobile.ps1.
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.featheraudio'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.featheraudio"
+  // the same NDK as the app (React Native decides it)
+  if (rootProject.ext.has('ndkVersion')) {
+    ndkVersion rootProject.ext.ndkVersion
+  }
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+    externalNativeBuild {
+      cmake {
+        arguments "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+      }
+    }
+  }
+  externalNativeBuild {
+    cmake {
+      path "src/main/cpp/CMakeLists.txt"
+    }
+  }
+}

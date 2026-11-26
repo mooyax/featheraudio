@@ -15,9 +15,10 @@ Rust だけで書いた、ゲーム向けの羽のように軽いオーディオ
 - **簡易 3D 定位**：聞き手（リスナー）と音の位置から、距離による減衰（逆距離・直線・指数）、左右の定位、ドップラー効果を付けます。計算はミキサー側で行うので、ゲームは位置を送るだけです。
 - **プチッというノイズが出ない**：音量の変化はなめらかにつなぎ、停止や一時停止も数ミリ秒でフェードアウトします。
 - **リアルタイムでも安全なミキシング**：音を作るスレッドはロックもメモリ確保もしません。ゲーム側とミキサーはキューだけでやり取りし、鳴り終わった音の後片付けはゲーム側で行います。
+- **ほかの言語・環境から使える**：C API（`capi/`、ヘッダーは `featheraudio.h`）、iOS・Android の React Native アプリ向けの Expo モジュール（`expo/`）、WebAssembly 版と遊べるデモ（`web/`）があります。
 - **出力先を選べる**：[cpal](https://github.com/RustAudio/cpal) で既定の音声デバイスに出すか、`Mixer::render` を自分で呼びます（独自のオーディオコールバック、WebAssembly、ファイルへの書き出し、テストなど）。
 
-状況：作り始めたところです（[計画](#計画)の第 3 段階まで完了）。API はまだ変わることがあります。
+状況：作り始めたところです（[計画](#計画)の 4 段階すべて完了。Expo モジュールは実機での確認待ち）。API はまだ変わることがあります。
 
 ## 使い方
 
@@ -77,6 +78,12 @@ cargo run --release --example demo -- [music]      # 短いデモを demo.wav �
 cargo run --release --example bench_fx             # エフェクトと 3D の CPU 負荷を測る
 ```
 
+## C API・Expo・WebAssembly
+
+- **C API** — [`capi/`](capi)：静的ライブラリ・共有ライブラリと、ヘッダー [`capi/include/featheraudio.h`](capi/include/featheraudio.h)（説明はヘッダーの中）。`capi/` で `cargo build --release` すると `target/release/libfeatheraudio.a` ができます。関数名は `fa_` で始まり、ハンドルとバスは数値、エフェクトの対象はハンドルか `FA_BUS(n)` です。`cpal` 機能付きでビルドすると `fa_audio_create()`（既定のデバイス、PC 向け）が使え、付けなければ自分のオーディオコールバックから `fa_audio_render()` を呼びます。[`capi/tests/test.c`](capi/tests/test.c) が C のテストプログラムです。
+- **Expo（iOS / Android）** — [`expo/`](expo)：TypeScript の API（`init`、`load`、`stream`、`play`、`setReverb`、`setPosition` など）を持つ、ローカルの Expo ネイティブモジュールです。[expo/README.ja.md](expo/README.ja.md) を見てください。
+- **WebAssembly** — [`web/`](web)：ブラウザの中でエンジンを動かし、Web Audio のコールバックで音を混ぜます。デモでは、クリックした場所に 3D の音を置く、車がドップラー効果付きで通り過ぎる、リバーブ・エコーの切り替え、BGM をこもらせる、落とした OGG・MP3・WAV・トラッカー曲を鳴らす、ができます。`web/build.sh`（Windows では `web\build-web.ps1`）で `web/dist` に作り、`--single` を付けると 1 つの HTML ファイルにまとめた版もできます。
+
 ## 機能（Cargo の features）
 
 | 名前 | 既定 | 追加されるもの |
@@ -109,7 +116,7 @@ cargo run --release --example bench_fx             # エフェクトと 3D の C
 1. **コア**（完了）：ボイス、ハンドル、バス、フェード、同時発音数の上限、WAV、トラッカー音楽（エンジン内蔵、形式ごとの feature）
 2. **形式とタイミング**（完了）：OGG / MP3（全部展開と、鳴らしながら展開）、`play_clocked`、遅らせて鳴らす、エンジンの時計
 3. **エフェクトと 3D**（完了）：フィルタ、エコー、リバーブ（Freeverb）、音・バスへのエフェクトとパラメータのフェード、距離による減衰・定位・ドップラー効果
-4. C API（Expo / Flutter / Unity などから使う）、iOS / Android 向けのつなぎ、WebAssembly のデモ
+4. **ほかの環境**（完了）：C API、iOS / Android 向けの Expo モジュール、WebAssembly のデモ
 
 ## 謝辞
 

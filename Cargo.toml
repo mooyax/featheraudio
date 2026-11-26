@@ -6,6 +6,7 @@ license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
 description = "A feather-light audio engine for games: fire-and-forget sounds, buses, fades and tracker music (MOD / IT / S3M / XM), in pure Rust"
 repository = "https://github.com/mooyax/featheraudio"
 readme = "README.md"
+exclude = ["/capi", "/web", "/expo", "/.github"]
 keywords = ["audio", "gamedev", "sound", "mixer", "tracker"]
 categories = ["multimedia::audio", "game-development"]
 

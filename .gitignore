@@ -1,2 +1,8 @@
 target/
 *.wav
+/capi/target
+/web/target
+/web/dist
+/expo/android/libs
+/expo/ios/FeatherAudio.xcframework
+/expo/node_modules

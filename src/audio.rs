@@ -16,6 +16,18 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Handle(pub(crate) u32);
 
+impl Handle {
+    /// The handle as a number (never 0), for passing through C, JavaScript and the like.
+    pub fn to_raw(self) -> u32 {
+        self.0
+    }
+    /// A handle from [`to_raw`](Self::to_raw). A number that was never a handle is harmless:
+    /// calls on it do nothing.
+    pub fn from_raw(raw: u32) -> Handle {
+        Handle(raw)
+    }
+}
+
 /// A group of voices with its own volume, fades and pause, e.g. music, effects, UI.
 /// [`Bus::MAIN`] always exists; [`Audio::create_bus`] makes more (up to 15).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -24,6 +36,15 @@ pub struct Bus(pub(crate) u16);
 impl Bus {
     /// The bus sounds play on unless told otherwise.
     pub const MAIN: Bus = Bus(0);
+
+    /// The bus as a number (0 = [`Bus::MAIN`], 1..15 = created buses).
+    pub fn to_raw(self) -> u16 {
+        self.0
+    }
+    /// A bus from [`to_raw`](Self::to_raw). Numbers above 15 mean the last bus.
+    pub fn from_raw(raw: u16) -> Bus {
+        Bus(raw)
+    }
 }
 
 /// How to play a sound. `PlayOptions::new()` is: volume 1, centred, normal speed, no loop,

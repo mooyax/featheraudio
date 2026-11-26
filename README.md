@@ -15,9 +15,10 @@ A feather-light audio engine for games, in pure Rust. Inspired by [SoLoud](https
 - **Simple 3D sound**: a listener and positioned sounds, with distance attenuation (inverse, linear, exponential), left/right panning and Doppler shift. Computed in the mixer, so the game only sends positions.
 - **Click-free**: volume changes are ramped; stop and pause fade out over a few milliseconds.
 - **Real-time safe mixing**: the audio thread never locks or allocates. The game side and the mixer only talk through queues, and finished sounds are freed on the game side.
+- **Other languages and platforms**: a C API (`capi/`, header `featheraudio.h`), an Expo module for React Native apps on iOS and Android (`expo/`), and a WebAssembly build with an interactive demo (`web/`).
 - **Any output**: the default device through [cpal](https://github.com/RustAudio/cpal), or call `Mixer::render` yourself (your own audio callback, WebAssembly, offline rendering, tests).
 
-Status: early (phase 3 of the [plan](#roadmap) done). The API may still change.
+Status: early (all 4 phases of the [plan](#roadmap) done; the Expo module still needs testing on devices). The API may still change.
 
 ## Example
 
@@ -77,6 +78,12 @@ cargo run --release --example demo -- [music]      # render a short demo to demo
 cargo run --release --example bench_fx             # CPU cost of effects and 3D
 ```
 
+## C API, Expo, WebAssembly
+
+- **C API** — [`capi/`](capi): a static or shared library and the header [`capi/include/featheraudio.h`](capi/include/featheraudio.h) (documented there). `cargo build --release` in `capi/` gives `target/release/libfeatheraudio.a`. Functions start with `fa_`; handles and buses are numbers; effects go on a handle or `FA_BUS(n)`. Build with the `cpal` feature for `fa_audio_create()` (default device, desktop); without it, call `fa_audio_render()` from your own audio callback. [`capi/tests/test.c`](capi/tests/test.c) is a C program that tests it.
+- **Expo (iOS / Android)** — [`expo/`](expo): a local Expo native module with a TypeScript API (`init`, `load`, `stream`, `play`, `setReverb`, `setPosition`…). See [expo/README.md](expo/README.md).
+- **WebAssembly** — [`web/`](web): the engine in the browser, mixed in a Web Audio callback. The demo page places 3D sounds where you click, drives a car past you with the Doppler shift, toggles reverb and echo, muffles the music, and plays OGG / MP3 / WAV / tracker files you drop on it. `web/build.sh` (or `web\build-web.ps1` on Windows) builds it into `web/dist`; `--single` also writes one self-contained HTML file.
+
 ## Features (Cargo)
 
 | Feature | Default | What it adds |
@@ -109,7 +116,7 @@ With `default-features = false` the crate has no dependencies at all; use `Audio
 1. **Core** (done): voices, handles, buses, fades, voice limit, WAV, tracker music (engines built in, one feature per format)
 2. **Formats and timing** (done): OGG / MP3 (in memory and streamed), `play_clocked`, delayed starts, engine clock
 3. **Effects and 3D** (done): filters, echo, reverb (Freeverb), effects on sounds and buses with parameter fades; distance attenuation, panning and Doppler
-4. C API (for Expo / Flutter / Unity…), iOS / Android glue, WebAssembly demo
+4. **Other platforms** (done): C API, Expo module for iOS / Android, WebAssembly demo
 
 ## Acknowledgements
 

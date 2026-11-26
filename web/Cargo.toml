@@ -1,0 +1,21 @@
+[package]
+name = "featheraudio-web"
+version = "0.1.0"
+edition = "2021"
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
+description = "featheraudio in the browser (WebAssembly): an interactive demo"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+featheraudio = { path = "..", default-features = false, features = ["tracker", "ogg", "mp3", "effects"] }
+wasm-bindgen = "=0.2.130"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
