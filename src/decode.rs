@@ -1,4 +1,4 @@
-//! Compressed audio formats: OGG Vorbis (lewton) and MP3 (nanomp3), behind the `ogg` and
+//! Compressed audio formats: OGG Vorbis (our port of stb_vorbis) and MP3 (nanomp3), behind the `ogg` and
 //! `mp3` features. Both decode from memory, frame by frame, so they can be streamed.
 
 use crate::Error;
@@ -80,26 +80,24 @@ pub(crate) fn decode_all(data: &[u8]) -> Result<(Vec<f32>, usize, u32), Error> {
 
 #[cfg(feature = "ogg")]
 struct OggDecoder {
-    data: Arc<[u8]>,
-    reader: lewton::inside_ogg::OggStreamReader<std::io::Cursor<Arc<[u8]>>>,
+    v: crate::vorbis::Vorbis,
 }
 
 #[cfg(feature = "ogg")]
 impl OggDecoder {
     fn new(data: Arc<[u8]>) -> Result<Self, Error> {
-        let reader = lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(data.clone())).map_err(|e| Error::Format(format!("OGG: {e}")))?;
-        Ok(OggDecoder { data, reader })
+        crate::vorbis::Vorbis::new(data).map(|v| OggDecoder { v }).ok_or_else(|| Error::Format("OGG: not a Vorbis stream, or broken".into()))
     }
 }
 
 #[cfg(feature = "ogg")]
 impl Decoder for OggDecoder {
     fn channels(&self) -> usize {
-        self.reader.ident_hdr.audio_channels as usize
+        self.v.channels
     }
 
     fn rate(&self) -> u32 {
-        self.reader.ident_hdr.audio_sample_rate
+        self.v.sample_rate
     }
 
     fn stereo_map(&self) -> (usize, usize) {
@@ -112,25 +110,45 @@ impl Decoder for OggDecoder {
     }
 
     fn decode(&mut self, out: &mut Vec<f32>) -> bool {
-        use lewton::samples::InterleavedSamples;
-        match self.reader.read_dec_packet_generic::<InterleavedSamples<f32>>() {
-            Ok(Some(p)) => {
-                out.extend_from_slice(&p.samples);
-                true
+        // frames can be empty (the first one, and at block size changes); skip those
+        loop {
+            match self.v.next_frame() {
+                Some(0) => continue,
+                Some(n) => {
+                    let ch = self.v.channels;
+                    let start = out.len();
+                    out.resize(start + n * ch, 0.0);
+                    for c in 0..ch {
+                        for (i, &x) in self.v.channel(c).iter().enumerate() {
+                            out[start + i * ch + c] = x;
+                        }
+                    }
+                    return true;
+                }
+                None => return false,
             }
-            _ => false,
         }
     }
 
     fn rewind(&mut self) -> bool {
-        match OggDecoder::new(self.data.clone()) {
-            Ok(d) => {
-                *self = d;
-                true
-            }
-            Err(_) => false,
-        }
+        self.v.rewind()
     }
+}
+
+/// For tests against stb_vorbis: decodes all channels, unchanged and interleaved, `rounds`
+/// times (going back to the start in between): (channels, rate, samples). Not part of the API.
+#[cfg(feature = "ogg")]
+#[doc(hidden)]
+pub fn ogg_decode_raw(data: &[u8], rounds: usize) -> Option<(usize, u32, Vec<f32>)> {
+    let mut d = OggDecoder::new(data.into()).ok()?;
+    let mut out = Vec::new();
+    for r in 0..rounds {
+        if r > 0 && !d.rewind() {
+            break;
+        }
+        while d.decode(&mut out) {}
+    }
+    Some((d.channels(), d.rate(), out))
 }
 
 #[cfg(feature = "mp3")]
@@ -173,4 +191,17 @@ impl Decoder for Mp3Decoder {
     fn rewind(&mut self) -> bool {
         self.reader.seek(0).is_ok()
     }
+}
+
+/// For benchmarks against stb_vorbis: decodes every frame and only counts the samples.
+/// Not part of the API.
+#[cfg(feature = "ogg")]
+#[doc(hidden)]
+pub fn ogg_decode_count(data: &[u8]) -> usize {
+    let Some(mut v) = crate::vorbis::Vorbis::new(data.into()) else { return 0 };
+    let mut n = 0;
+    while let Some(len) = v.next_frame() {
+        n += len;
+    }
+    n
 }

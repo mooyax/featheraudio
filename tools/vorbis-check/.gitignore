@@ -1,0 +1,6 @@
+stb_vorbis.c
+cref
+c.out
+r.out
+rs/target
+rs/Cargo.lock

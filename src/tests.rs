@@ -583,3 +583,61 @@ mod spatial3d {
         );
     }
 }
+
+#[cfg(feature = "ogg")]
+mod vorbis_port {
+    //! The OGG decoder is a port of stb_vorbis; these hashes are of stb_vorbis 1.25's own output
+    //! (all channels, interleaved f32, little endian), made with tools/vorbis-check.
+
+    fn fnv(samples: &[f32]) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in samples.iter().flat_map(|s| s.to_le_bytes()) {
+            h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+        }
+        h
+    }
+
+    fn check(file: &str, rounds: usize, ch: usize, rate: u32, len: usize, hash: u64) {
+        let data = std::fs::read(format!("{}/tests/data/{file}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let (c, r, s) = crate::ogg_decode_raw(&data, rounds).unwrap();
+        assert_eq!((c, r, s.len()), (ch, rate, len), "{file} x{rounds}");
+        assert_eq!(fnv(&s), hash, "{file} x{rounds}: output differs from stb_vorbis");
+    }
+
+    #[test]
+    fn same_output_as_stb_vorbis() {
+        check("tone.ogg", 1, 1, 22050, 5513, 0x1af8a3570790d7e6);
+        check("stereo.ogg", 1, 2, 44100, 22050, 0xa5d5735b1044086d);
+        check("surround51.ogg", 1, 6, 44100, 105840, 0x37d99cac762d62c5);
+    }
+
+    #[test]
+    fn same_output_after_going_back_to_the_start() {
+        check("tone.ogg", 2, 1, 22050, 11026, 0x31347b4e1aedd9a9);
+        check("stereo.ogg", 2, 2, 44100, 44100, 0xbc5cc6a061418295);
+        check("surround51.ogg", 2, 6, 44100, 211680, 0x52ee796498298ce5);
+    }
+
+    #[test]
+    fn broken_files_do_not_panic() {
+        let data = std::fs::read(format!("{}/tests/data/stereo.ogg", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let mut x: u64 = 12345;
+        let mut rnd = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for _ in 0..300 {
+            let mut d = data.clone();
+            for _ in 0..1 + rnd() % 6 {
+                let i = (rnd() % d.len() as u64) as usize;
+                d[i] ^= 1 << (rnd() % 8);
+            }
+            if rnd() % 4 == 0 {
+                d.truncate((rnd() % d.len() as u64) as usize + 1);
+            }
+            let _ = crate::ogg_decode_raw(&d, 2);
+        }
+    }
+}

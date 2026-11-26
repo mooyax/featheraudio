@@ -1,0 +1,8 @@
+[package]
+name = "vorbis-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+featheraudio = { path = "../../..", default-features = false, features = ["ogg"] }

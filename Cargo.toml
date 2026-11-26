@@ -6,7 +6,7 @@ license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
 description = "A feather-light audio engine for games: fire-and-forget sounds, buses, fades and tracker music (MOD / IT / S3M / XM), in pure Rust"
 repository = "https://github.com/mooyax/featheraudio"
 readme = "README.md"
-exclude = ["/capi", "/web", "/expo", "/.github"]
+exclude = ["/capi", "/web", "/expo", "/tools", "/.github"]
 keywords = ["audio", "gamedev", "sound", "mixer", "tracker"]
 categories = ["multimedia::audio", "game-development"]
 
@@ -16,8 +16,8 @@ default = ["cpal", "tracker", "ogg", "mp3", "effects"]
 effects = []
 # audio output through cpal (Windows / macOS / Linux / Android / iOS); without it, call Mixer::render yourself
 cpal = ["dep:cpal"]
-# OGG Vorbis decoding (lewton), about 140 KB
-ogg = ["dep:lewton"]
+# OGG Vorbis decoding: a built-in port of stb_vorbis (no dependencies), about 80 KB with streaming
+ogg = []
 # MP3 decoding (nanomp3, a pure Rust port of minimp3), about 60 KB
 mp3 = ["dep:nanomp3"]
 # tracker music: all three engines
@@ -31,7 +31,6 @@ xm = []
 
 [dependencies]
 cpal = { version = "0.15", optional = true }
-lewton = { version = "0.10", optional = true }
 nanomp3 = { version = "0.2", optional = true, default-features = false, features = ["std"] }
 
 [profile.release]

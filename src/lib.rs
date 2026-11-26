@@ -35,6 +35,8 @@ mod audio;
 mod decode;
 pub mod effects;
 mod mixer;
+#[cfg(feature = "ogg")]
+mod vorbis;
 mod source;
 pub mod spatial;
 #[cfg(any(feature = "ogg", feature = "mp3"))]
@@ -52,6 +54,10 @@ pub use stream::Stream;
 #[cfg(any(feature = "mod", feature = "it", feature = "xm"))]
 pub use tracker::Tracker;
 pub use wav::Wav;
+
+#[cfg(feature = "ogg")]
+#[doc(hidden)]
+pub use decode::{ogg_decode_count, ogg_decode_raw};
 
 /// Errors from loading sounds or opening the audio device.
 #[derive(Debug)]

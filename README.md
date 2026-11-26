@@ -11,7 +11,7 @@ A feather-light audio engine for games, in pure Rust. Inspired by [SoLoud](https
 - **Buses** (music, effects, UI…) with their own volume, fades and pause.
 - **Voice limit** with protection: when all voices are in use, the oldest unprotected one makes room.
 - **Tracker music** (MOD / IT / S3M / XM) with built-in engines, mixed together with your sound effects. Each format is a separate feature, so you only ship the engines you use. The same engines power the [modplay](https://github.com/mooyax/modplay-rs) player.
-- **WAV, OGG Vorbis and MP3**: `Wav` decodes a file into memory (sound effects); `Stream` decodes while playing (music — a minute of stereo would otherwise take 23 MB). Streaming a 60 s file costs about 0.1% of one CPU core.
+- **WAV, OGG Vorbis and MP3**: OGG Vorbis is decoded by a built-in port of stb_vorbis (no dependencies). `Wav` decodes a file into memory (sound effects); `Stream` decodes while playing (music — a minute of stereo would otherwise take 23 MB). Streaming a 60 s file costs about 0.1% of one CPU core.
 - **Sample-accurate timing**: `play_clocked` spreads sounds started during one audio buffer by their game times (rapid fire stays even, whatever the buffer size), `PlayOptions::delay` starts a sound exactly N seconds later, and `Audio::time()` is the engine's clock.
 - **Effects**: low-pass / high-pass / band-pass / notch filters, echo and reverb, on a single sound or a whole bus (up to 4 per sound or bus), with smooth parameter fades — muffle the music when the pause menu opens with one call. Write your own by implementing `Effect`. Bus effects keep ringing after the sounds end.
 - **Simple 3D sound**: a listener and positioned sounds, with distance attenuation (inverse, linear, exponential), left/right panning and Doppler shift. Computed in the mixer, so the game only sends positions.
@@ -91,7 +91,7 @@ cargo run --release --example bench_fx             # CPU cost of effects and 3D
 | Feature | Default | What it adds |
 |---|---|---|
 | `cpal` | yes | `Audio::new()`: output to the default device through cpal |
-| `ogg` | yes | OGG Vorbis in `Wav` and `Stream` (through [lewton](https://github.com/RustAudio/lewton)) — about 140 KB |
+| `ogg` | yes | OGG Vorbis in `Wav` and `Stream`, with a built-in decoder: a port of [stb_vorbis](https://github.com/nothings/stb) whose output is bit-identical to it — about 80 KB with streaming (lewton took about 130 KB), and about 1.6× as fast as lewton |
 | `mp3` | yes | MP3 in `Wav` and `Stream` (through [nanomp3](https://crates.io/crates/nanomp3), a pure Rust port of minimp3) — about 60 KB |
 | `effects` | yes | the built-in effects `Filter`, `Echo`, `Reverb` — about 10 KB (the `Effect` trait, for your own effects, and 3D are always there) |
 | `tracker` | yes | all three tracker engines below |
@@ -126,7 +126,8 @@ With `default-features = false` the crate has no dependencies at all; use `Audio
 - [pt2-clone](https://github.com/8bitbubsy/pt2-clone) and [ft2-clone](https://github.com/8bitbubsy/ft2-clone) by Olav Sørensen (8bitbubsy) — the MOD and XM engines are ports of their replayers.
 - [Freeverb](https://ccrma.stanford.edu/~jos/pasp/Freeverb.html) by Jezar at Dreampoint (public domain) — the reverb's design and tunings. The filters follow Robert Bristow-Johnson's Audio EQ Cookbook; distance and Doppler follow the OpenAL specification.
 - [OpenMPT / libopenmpt](https://openmpt.org/) — the reference for the IT / S3M engine, whose resonant filters and mix-level tables follow OpenMPT.
-- [cpal](https://github.com/RustAudio/cpal) — audio output; [lewton](https://github.com/RustAudio/lewton) — OGG Vorbis; [nanomp3](https://crates.io/crates/nanomp3), a port of [minimp3](https://github.com/lieff/minimp3) — MP3.
+- [stb_vorbis](https://github.com/nothings/stb) by Sean Barrett (public domain / MIT) — the OGG Vorbis decoder is a port of it (`src/vorbis.rs`), checked to give exactly the same samples with `tools/vorbis-check`.
+- [cpal](https://github.com/RustAudio/cpal) — audio output; [nanomp3](https://crates.io/crates/nanomp3), a port of [minimp3](https://github.com/lieff/minimp3) — MP3.
 
 ## License
 
