@@ -116,9 +116,9 @@ jobs:
           xcrun simctl boot "$dev"
           app=$(ls -d build/Build/Products/Release-iphonesimulator/*.app | head -1)
           xcrun simctl install "$dev" "$app"
-          xcrun simctl spawn "$dev" log stream --style compact --predicate 'eventMessage CONTAINS "FEATHERAUDIO" OR eventMessage CONTAINS "engine started" OR eventMessage CONTAINS "loaded"' > sim.log 2>&1 &
+          xcrun simctl spawn "$dev" log stream --style compact --predicate 'process == "featheraudiotest"' > sim.log 2>&1 &
           sleep 3
           xcrun simctl launch "$dev" com.mooyax.featheraudio.example
-          sleep 25
-          cat sim.log | head -60
+          for i in $(seq 1 30); do grep -q "FEATHERAUDIO_SELFTEST" sim.log && break; sleep 2; done
+          grep -iE "FEATHERAUDIO|featheraudio|exception|crash" sim.log | head -40 || true
           grep -q "FEATHERAUDIO_SELFTEST PASS" sim.log

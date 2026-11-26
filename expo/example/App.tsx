@@ -33,7 +33,10 @@ export default function App() {
   const [muffled, setMuffled] = useState(false);
 
   const log = (s: string) => {
-    console.log(s);
+    // iOS release builds pass only errors to the system log, where the CI looks for the
+    // self-test line
+    if (!__DEV__ && s.startsWith("FEATHERAUDIO_SELFTEST")) console.error(s);
+    else console.log(s);
     setLines((l) => [...l.slice(-30), s]);
   };
 
