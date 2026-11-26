@@ -103,7 +103,7 @@ jobs:
           ws=$(ls -d *.xcworkspace | head -1); scheme=${ws%.xcworkspace}
           set +e
           xcodebuild -workspace "$ws" -scheme "$scheme" -configuration Release -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build ARCHS=arm64 \
             CODE_SIGNING_ALLOWED=NO build > xcodebuild.log 2>&1
           r=$?
           grep -nE "error|Error|failed|FAILED" xcodebuild.log | grep -v "^.*note:" | head -80
