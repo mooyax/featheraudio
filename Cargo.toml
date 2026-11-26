@@ -42,5 +42,9 @@ name = "play"
 required-features = ["cpal"]
 
 [[example]]
+name = "bench_fx"
+required-features = ["effects"]
+
+[[example]]
 name = "bench_stream"
 required-features = ["ogg"]
