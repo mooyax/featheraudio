@@ -1,7 +1,11 @@
 //! The game-side half of the engine.
 
-use crate::mixer::{BusCmd, Clock, Command, Ended, Mixer, VoiceCmd, MAX_BUSES};
+use crate::effects::{Effect, EffectTarget};
+use crate::mixer::{
+    BusCmd, Clock, Command, EffectAt, EffectCmd, Ended, ListenerCmd, Mixer, VoiceCmd, MAX_BUSES,
+};
 use crate::source::Source;
+use crate::spatial::Spatial;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -23,7 +27,7 @@ impl Bus {
 }
 
 /// How to play a sound. `PlayOptions::new()` is: volume 1, centred, normal speed, no loop,
-/// not paused, on [`Bus::MAIN`], not protected, no delay.
+/// not paused, on [`Bus::MAIN`], not protected, no delay, not 3D.
 #[derive(Clone, Copy, Debug)]
 pub struct PlayOptions {
     pub volume: f32,
@@ -39,11 +43,24 @@ pub struct PlayOptions {
     pub protected: bool,
     /// seconds of silence before the sound starts (sample-accurate)
     pub delay: f32,
+    /// makes it a 3D sound: volume, pan and pitch follow its position relative to the
+    /// listener ([`Audio::set_listener`])
+    pub spatial: Option<Spatial>,
 }
 
 impl Default for PlayOptions {
     fn default() -> Self {
-        PlayOptions { volume: 1.0, pan: 0.0, speed: 1.0, looping: false, paused: false, bus: Bus::MAIN, protected: false, delay: 0.0 }
+        PlayOptions {
+            volume: 1.0,
+            pan: 0.0,
+            speed: 1.0,
+            looping: false,
+            paused: false,
+            bus: Bus::MAIN,
+            protected: false,
+            delay: 0.0,
+            spatial: None,
+        }
     }
 }
 
@@ -83,6 +100,11 @@ impl PlayOptions {
         self.delay = seconds;
         self
     }
+    /// Plays the sound in 3D; see [`Spatial`].
+    pub fn spatial(mut self, s: Spatial) -> Self {
+        self.spatial = Some(s);
+        self
+    }
 }
 
 struct Front {
@@ -100,8 +122,10 @@ struct Front {
 impl Front {
     /// takes in the voices the mixer has finished with (and drops their instances here)
     fn collect(&mut self) {
-        while let Ok(Ended(h, _instance)) = self.ended.try_recv() {
-            self.alive.remove(&h);
+        while let Ok(e) = self.ended.try_recv() {
+            if let Ended::Voice(h, ..) = e {
+                self.alive.remove(&h);
+            }
         }
     }
 }
@@ -124,8 +148,14 @@ impl Audio {
         let (end_tx, end_rx) = channel();
         let clock = Arc::new(Clock::default());
         let c = clock.clone();
-        let (output, rate) = cpal_output::Output::start(move |rate| Mixer::new(rate, cmd_rx, end_tx, c))?;
-        Ok(Audio { front: Mutex::new(Front::new(cmd_tx, end_rx)), clock, rate, _output: Some(output) })
+        let (output, rate) =
+            cpal_output::Output::start(move |rate| Mixer::new(rate, cmd_rx, end_tx, c))?;
+        Ok(Audio {
+            front: Mutex::new(Front::new(cmd_tx, end_rx)),
+            clock,
+            rate,
+            _output: Some(output),
+        })
     }
 
     /// Creates the engine without opening a device: you get the [`Mixer`] and call
@@ -173,7 +203,13 @@ impl Audio {
         self.start(&mut f, source, opts, 0)
     }
 
-    fn start(&self, f: &mut Front, source: &dyn Source, opts: PlayOptions, extra_delay: u64) -> Handle {
+    fn start(
+        &self,
+        f: &mut Front,
+        source: &dyn Source,
+        opts: PlayOptions,
+        extra_delay: u64,
+    ) -> Handle {
         // the instance is created (and allocated) here, on the game side
         let instance = source.instance(self.rate);
         f.collect();
@@ -181,7 +217,12 @@ impl Audio {
         let handle = Handle(f.next_handle);
         f.alive.insert(handle);
         let delay = (opts.delay.max(0.0) as f64 * self.rate as f64).round() as u64 + extra_delay;
-        let _ = f.commands.send(Command::Play { handle, instance, opts, delay });
+        let _ = f.commands.send(Command::Play {
+            handle,
+            instance,
+            opts,
+            delay,
+        });
         handle
     }
 
@@ -201,7 +242,9 @@ impl Audio {
             // a later sound in the same buffer: start it as much later as its time is
             Some((r, t0)) if r == renders && time >= t0 => {
                 // at most a quarter of a second, in case the game stalled
-                ((time - t0) * self.rate as f64).round().min(self.rate as f64 / 4.0) as u64
+                ((time - t0) * self.rate as f64)
+                    .round()
+                    .min(self.rate as f64 / 4.0) as u64
             }
             _ => {
                 f.clocked = Some((renders, time));
@@ -310,6 +353,91 @@ impl Audio {
         self.send(Command::Bus(b, BusCmd::Stop));
     }
 
+    /// Puts an effect in one of the [`MAX_EFFECTS`](crate::effects::MAX_EFFECTS) slots of a
+    /// sound (pass its [`Handle`]) or a bus (pass the [`Bus`]), replacing what was there.
+    /// Effects run in slot order. See [`effects`](crate::effects).
+    pub fn set_effect(
+        &self,
+        target: impl Into<EffectTarget>,
+        slot: usize,
+        mut effect: impl Effect + 'static,
+    ) {
+        // buffers are allocated here, on the game side
+        effect.prepare(self.rate);
+        self.effect(target.into(), slot, EffectCmd::Set(Box::new(effect)));
+    }
+
+    /// Removes the effect in a slot.
+    pub fn remove_effect(&self, target: impl Into<EffectTarget>, slot: usize) {
+        self.effect(target.into(), slot, EffectCmd::Remove);
+    }
+
+    /// Changes a parameter of the effect in a slot: [`effects::WET`](crate::effects::WET) or
+    /// one of the effect's own (e.g. [`Filter::CUTOFF`](crate::effects::Filter::CUTOFF)).
+    pub fn set_effect_param(
+        &self,
+        target: impl Into<EffectTarget>,
+        slot: usize,
+        param: u32,
+        value: f32,
+    ) {
+        self.effect(target.into(), slot, EffectCmd::Param(param, value));
+    }
+
+    /// Changes a parameter smoothly to `value` over `seconds`. The fade starts from the value
+    /// last given to this parameter with `set_effect_param` or a fade; if there was none, the
+    /// parameter jumps to `value` (the engine does not know effects' starting values).
+    pub fn fade_effect_param(
+        &self,
+        target: impl Into<EffectTarget>,
+        slot: usize,
+        param: u32,
+        value: f32,
+        seconds: f32,
+    ) {
+        self.effect(target.into(), slot, EffectCmd::Fade(param, value, seconds));
+    }
+
+    fn effect(&self, t: EffectTarget, slot: usize, c: EffectCmd) {
+        let at = match t {
+            EffectTarget::Voice(h) => EffectAt::Voice(h),
+            EffectTarget::Bus(b) => EffectAt::Bus(b.0 as usize),
+        };
+        self.send(Command::Effect(at, slot, c));
+    }
+
+    /// Places the listener (the player's ears, usually the camera) for 3D sounds: its
+    /// position, the direction it faces and its up direction. Default: at the origin, facing
+    /// -Z, +Y up.
+    pub fn set_listener(&self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]) {
+        self.send(Command::Listener(ListenerCmd::Place(position, forward, up)));
+    }
+
+    /// The listener's velocity in units per second, for the Doppler shift.
+    pub fn set_listener_velocity(&self, velocity: [f32; 3]) {
+        self.send(Command::Listener(ListenerCmd::Velocity(velocity)));
+    }
+
+    /// Units per second (default 343: metres in air). Affects only the Doppler shift.
+    pub fn set_speed_of_sound(&self, speed: f32) {
+        self.send(Command::Listener(ListenerCmd::SpeedOfSound(speed)));
+    }
+
+    /// Makes a playing sound 3D, or changes all of its 3D settings at once.
+    pub fn set_spatial(&self, h: Handle, s: Spatial) {
+        self.voice(h, VoiceCmd::Spatial(s));
+    }
+
+    /// Moves a 3D sound. Call it every frame for moving objects.
+    pub fn set_position(&self, h: Handle, position: [f32; 3]) {
+        self.voice(h, VoiceCmd::Position(position));
+    }
+
+    /// A 3D sound's velocity in units per second, for the Doppler shift.
+    pub fn set_velocity(&self, h: Handle, velocity: [f32; 3]) {
+        self.voice(h, VoiceCmd::Velocity(velocity));
+    }
+
     pub fn set_master_volume(&self, volume: f32) {
         self.send(Command::MasterVolume(volume));
     }
@@ -321,7 +449,14 @@ impl Audio {
 
 impl Front {
     fn new(commands: Sender<Command>, ended: Receiver<Ended>) -> Front {
-        Front { commands, ended, next_handle: 0, next_bus: 0, alive: HashSet::new(), clocked: None }
+        Front {
+            commands,
+            ended,
+            next_handle: 0,
+            next_bus: 0,
+            alive: HashSet::new(),
+            clocked: None,
+        }
     }
 }
 
@@ -351,7 +486,9 @@ pub(crate) mod cpal_output {
     }
 
     impl Output {
-        pub(crate) fn start(make_mixer: impl FnOnce(u32) -> Mixer + Send + 'static) -> Result<(Output, u32), Error> {
+        pub(crate) fn start(
+            make_mixer: impl FnOnce(u32) -> Mixer + Send + 'static,
+        ) -> Result<(Output, u32), Error> {
             let (ready_tx, ready_rx) = sync_channel::<Result<u32, Error>>(1);
             let (stop_tx, stop_rx) = channel::<()>();
             let thread = std::thread::Builder::new()
@@ -372,15 +509,27 @@ pub(crate) mod cpal_output {
                     drop(stream);
                 })
                 .map_err(|e| Error::Device(e.to_string()))?;
-            let rate = ready_rx.recv().map_err(|_| Error::Device("audio thread failed to start".into()))??;
-            Ok((Output { stop: Some(stop_tx), thread: Some(thread) }, rate))
+            let rate = ready_rx
+                .recv()
+                .map_err(|_| Error::Device("audio thread failed to start".into()))??;
+            Ok((
+                Output {
+                    stop: Some(stop_tx),
+                    thread: Some(thread),
+                },
+                rate,
+            ))
         }
     }
 
     fn open(make_mixer: impl FnOnce(u32) -> Mixer) -> Result<(cpal::Stream, u32), Error> {
         let host = cpal::default_host();
-        let device = host.default_output_device().ok_or_else(|| Error::Device("no output device".into()))?;
-        let cfg = device.default_output_config().map_err(|e| Error::Device(e.to_string()))?;
+        let device = host
+            .default_output_device()
+            .ok_or_else(|| Error::Device("no output device".into()))?;
+        let cfg = device
+            .default_output_config()
+            .map_err(|e| Error::Device(e.to_string()))?;
         let rate = cfg.sample_rate().0;
         let channels = cfg.channels() as usize;
         let config: cpal::StreamConfig = cfg.config();
@@ -388,10 +537,35 @@ pub(crate) mod cpal_output {
         let mut buf: Vec<f32> = vec![0.0; 8192];
         let err = |e| eprintln!("featheraudio: stream error: {e}");
         let stream = match cfg.sample_format() {
-            cpal::SampleFormat::F32 => device.build_output_stream(&config, move |d: &mut [f32], _| write(d, channels, &mut mixer, &mut buf, |v| v), err, None),
-            cpal::SampleFormat::I16 => device.build_output_stream(&config, move |d: &mut [i16], _| write(d, channels, &mut mixer, &mut buf, |v| (v * 32767.0) as i16), err, None),
-            cpal::SampleFormat::U16 => device.build_output_stream(&config, move |d: &mut [u16], _| write(d, channels, &mut mixer, &mut buf, |v| ((v * 32767.0) as i32 + 32768) as u16), err, None),
-            other => return Err(Error::Device(format!("unsupported sample format {other:?}"))),
+            cpal::SampleFormat::F32 => device.build_output_stream(
+                &config,
+                move |d: &mut [f32], _| write(d, channels, &mut mixer, &mut buf, |v| v),
+                err,
+                None,
+            ),
+            cpal::SampleFormat::I16 => device.build_output_stream(
+                &config,
+                move |d: &mut [i16], _| {
+                    write(d, channels, &mut mixer, &mut buf, |v| (v * 32767.0) as i16)
+                },
+                err,
+                None,
+            ),
+            cpal::SampleFormat::U16 => device.build_output_stream(
+                &config,
+                move |d: &mut [u16], _| {
+                    write(d, channels, &mut mixer, &mut buf, |v| {
+                        ((v * 32767.0) as i32 + 32768) as u16
+                    })
+                },
+                err,
+                None,
+            ),
+            other => {
+                return Err(Error::Device(format!(
+                    "unsupported sample format {other:?}"
+                )))
+            }
         }
         .map_err(|e| Error::Device(e.to_string()))?;
         stream.play().map_err(|e| Error::Device(e.to_string()))?;
@@ -399,7 +573,13 @@ pub(crate) mod cpal_output {
     }
 
     /// renders stereo and spreads it over the device's channels (mono devices get L+R)
-    fn write<T: Copy>(d: &mut [T], channels: usize, mixer: &mut Mixer, buf: &mut Vec<f32>, conv: impl Fn(f32) -> T) {
+    fn write<T: Copy>(
+        d: &mut [T],
+        channels: usize,
+        mixer: &mut Mixer,
+        buf: &mut Vec<f32>,
+        conv: impl Fn(f32) -> T,
+    ) {
         let frames = d.len() / channels;
         if buf.len() < frames * 2 {
             buf.resize(frames * 2, 0.0); // only if the device asks for an unusually large block

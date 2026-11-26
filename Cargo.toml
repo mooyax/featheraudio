@@ -10,7 +10,9 @@ keywords = ["audio", "gamedev", "sound", "mixer", "tracker"]
 categories = ["multimedia::audio", "game-development"]
 
 [features]
-default = ["cpal", "tracker", "ogg", "mp3"]
+default = ["cpal", "tracker", "ogg", "mp3", "effects"]
+# built-in effects: Filter, Echo, Reverb (the Effect trait is always there)
+effects = []
 # audio output through cpal (Windows / macOS / Linux / Android / iOS); without it, call Mixer::render yourself
 cpal = ["dep:cpal"]
 # OGG Vorbis decoding (lewton), about 140 KB
@@ -37,3 +39,7 @@ opt-level = 3
 [[example]]
 name = "play"
 required-features = ["cpal"]
+
+[[example]]
+name = "bench_stream"
+required-features = ["ogg"]

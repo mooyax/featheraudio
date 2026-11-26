@@ -2,7 +2,9 @@
 //! queue and never locks. Finished instances are sent back to be dropped on the game side, so
 //! the audio thread does not free memory either.
 
+use crate::effects::{Effect, MAX_EFFECTS, WET};
 use crate::source::Instance;
+use crate::spatial::{self, Listener, Spatial};
 use crate::{Bus, Handle, PlayOptions};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -19,12 +21,41 @@ const DECLICK_SECONDS: f32 = 0.005;
 
 pub(crate) enum Command {
     /// `delay`: frames of silence before the sound starts
-    Play { handle: Handle, instance: Box<dyn Instance>, opts: PlayOptions, delay: u64 },
+    Play {
+        handle: Handle,
+        instance: Box<dyn Instance>,
+        opts: PlayOptions,
+        delay: u64,
+    },
     Voice(Handle, VoiceCmd),
     Bus(Bus, BusCmd),
+    Effect(EffectAt, usize, EffectCmd),
+    Listener(ListenerCmd),
     MasterVolume(f32),
     MaxVoices(usize),
     StopAll,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum EffectAt {
+    Voice(Handle),
+    Bus(usize),
+}
+
+pub(crate) enum EffectCmd {
+    /// put an effect in the slot (already prepared for the output rate)
+    Set(Box<dyn Effect>),
+    Remove,
+    Param(u32, f32),
+    /// fade a parameter to a value over seconds
+    Fade(u32, f32, f32),
+}
+
+pub(crate) enum ListenerCmd {
+    /// position, forward, up
+    Place([f32; 3], [f32; 3], [f32; 3]),
+    Velocity([f32; 3]),
+    SpeedOfSound(f32),
 }
 
 pub(crate) enum VoiceCmd {
@@ -36,6 +67,9 @@ pub(crate) enum VoiceCmd {
     Protected(bool),
     /// fade the volume to `to` over `secs`
     Fade(f32, f32),
+    Spatial(Spatial),
+    Position([f32; 3]),
+    Velocity([f32; 3]),
     /// stop after `secs` (with a short fade-out)
     StopAfter(f32),
     Stop,
@@ -57,9 +91,15 @@ pub(crate) struct Clock {
     pub frames: AtomicU64,
 }
 
-/// Sent back to [`Audio`](crate::Audio): the voice has ended (finished, stopped or was
-/// replaced by a newer one); the instance is dropped there.
-pub(crate) struct Ended(pub Handle, #[allow(dead_code)] pub Box<dyn Instance>);
+/// Sent back to [`Audio`](crate::Audio) to be dropped there, so the audio thread never frees
+/// memory.
+#[allow(dead_code)]
+pub(crate) enum Ended {
+    /// the voice has ended (finished, stopped or was replaced by a newer one)
+    Voice(Handle, Box<dyn Instance>),
+    /// an effect that was replaced or removed, or sent to a voice that had already ended
+    Effect(Box<dyn Effect>),
+}
 
 /// A volume that can fade linearly towards a target over a number of frames.
 #[derive(Clone, Copy)]
@@ -72,7 +112,11 @@ struct Fader {
 
 impl Fader {
     fn new(v: f32) -> Self {
-        Fader { value: v, target: v, left: 0 }
+        Fader {
+            value: v,
+            target: v,
+            left: 0,
+        }
     }
 
     fn set(&mut self, v: f32) {
@@ -102,6 +146,134 @@ impl Fader {
     }
 }
 
+/// One effect in a chain, with its wet level and parameter fades.
+struct Slot {
+    fx: Box<dyn Effect>,
+    wet: Fader,
+    /// wet level at the end of the last block
+    wet_gain: f32,
+    /// parameters being faded (id, fader); `NO_PARAM` marks a free entry
+    fades: [(u32, Fader); 4],
+}
+
+const NO_PARAM: u32 = u32::MAX;
+
+type Chain = [Option<Slot>; MAX_EFFECTS];
+
+fn empty_chain() -> Chain {
+    [const { None }; MAX_EFFECTS]
+}
+
+fn has_effects(c: &Chain) -> bool {
+    c.iter().any(|s| s.is_some())
+}
+
+/// Applies a command to a chain. Removed effects are returned to be dropped on the game side.
+fn chain_cmd(chain: &mut Chain, slot: usize, cmd: EffectCmd, rate: u32) -> Option<Box<dyn Effect>> {
+    let Some(entry) = chain.get_mut(slot) else {
+        return match cmd {
+            EffectCmd::Set(fx) => Some(fx),
+            _ => None,
+        };
+    };
+    match cmd {
+        EffectCmd::Set(fx) => entry
+            .replace(Slot {
+                fx,
+                wet: Fader::new(1.0),
+                wet_gain: 1.0,
+                fades: [(NO_PARAM, Fader::new(0.0)); 4],
+            })
+            .map(|s| s.fx),
+        EffectCmd::Remove => entry.take().map(|s| s.fx),
+        EffectCmd::Param(p, v) => {
+            if let Some(s) = entry {
+                if p == WET {
+                    // a set jumps (no ramp)
+                    s.wet.set(v);
+                    s.wet_gain = v;
+                } else {
+                    // remember the value (cancelling any fade), so a later fade starts from it
+                    if let Some(i) = s
+                        .fades
+                        .iter()
+                        .position(|f| f.0 == p)
+                        .or_else(|| s.fades.iter().position(|f| f.0 == NO_PARAM))
+                    {
+                        s.fades[i] = (p, Fader::new(v));
+                    }
+                    s.fx.set_param(p, v);
+                }
+            }
+            None
+        }
+        EffectCmd::Fade(p, v, secs) => {
+            if let Some(s) = entry {
+                let n = (secs.max(0.0) as f64 * rate as f64).round() as u64;
+                if p == WET {
+                    s.wet.fade(v, n);
+                } else {
+                    // the current value is not known to the engine: the fade starts from the
+                    // value last set by a fade or set_param, or jumps if there was none
+                    let i = s
+                        .fades
+                        .iter()
+                        .position(|f| f.0 == p)
+                        .or_else(|| s.fades.iter().position(|f| f.0 == NO_PARAM))
+                        .unwrap_or(0);
+                    let mut f = if s.fades[i].0 == p {
+                        s.fades[i].1
+                    } else {
+                        Fader::new(v)
+                    };
+                    f.fade(v, n);
+                    s.fades[i] = (p, f);
+                    s.fx.set_param(p, f.value);
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Runs a chain over `buf` (interleaved stereo) for a block of `n` frames. `dry` is scratch
+/// space at least as long as `buf`.
+fn run_chain(chain: &mut Chain, buf: &mut [f32], dry: &mut [f32], n: u64) {
+    for s in chain.iter_mut().flatten() {
+        for (p, f) in s.fades.iter_mut() {
+            // finished fades stay in the list (left == 0) so a later fade starts from their value
+            if *p != NO_PARAM && f.left > 0 {
+                f.step(n);
+                s.fx.set_param(*p, f.value);
+            }
+        }
+        s.wet.step(n);
+        let (from, to) = (s.wet_gain, s.wet.value);
+        s.wet_gain = to;
+        if from >= 1.0 && to >= 1.0 {
+            s.fx.process(buf);
+        } else if from <= 0.0 && to <= 0.0 {
+            // bypassed
+        } else {
+            let dry = &mut dry[..buf.len()];
+            dry.copy_from_slice(buf);
+            s.fx.process(buf);
+            let frames = (buf.len() / 2).max(1) as f32;
+            let d = (to - from) / frames;
+            let mut w = from;
+            for (o, x) in buf.chunks_exact_mut(2).zip(dry.chunks_exact(2)) {
+                w += d;
+                o[0] = x[0] + (o[0] - x[0]) * w;
+                o[1] = x[1] + (o[1] - x[1]) * w;
+            }
+        }
+    }
+}
+
+fn chain_tail(c: &Chain) -> f32 {
+    c.iter().flatten().map(|s| s.fx.tail()).fold(0.0, f32::max)
+}
+
 struct Voice {
     handle: Handle,
     inst: Box<dyn Instance>,
@@ -120,12 +292,21 @@ struct Voice {
     serial: u64,
     /// frames to wait before starting
     delay: u64,
+    /// playback speed set by the game (the Doppler shift is applied on top)
+    speed: f32,
+    /// speed last given to the instance
+    applied_speed: f32,
+    spatial: Option<Spatial>,
+    effects: Chain,
 }
 
 struct BusState {
     volume: Fader,
     paused: bool,
     gain: f32,
+    effects: Chain,
+    /// frames since sound last reached the bus (to stop running effects once their tail ends)
+    quiet: u64,
 }
 
 /// The mixing side of the engine.
@@ -145,7 +326,9 @@ pub struct Mixer {
     master: Fader,
     master_gain: f32,
     tmp: Vec<f32>,
+    dry: Vec<f32>,
     bus_buf: Vec<f32>,
+    listener: Listener,
     clock: Arc<Clock>,
 }
 
@@ -157,7 +340,12 @@ fn pan_gains(pan: f32) -> [f32; 2] {
 }
 
 impl Mixer {
-    pub(crate) fn new(rate: u32, commands: Receiver<Command>, ended: Sender<Ended>, clock: Arc<Clock>) -> Mixer {
+    pub(crate) fn new(
+        rate: u32,
+        commands: Receiver<Command>,
+        ended: Sender<Ended>,
+        clock: Arc<Clock>,
+    ) -> Mixer {
         Mixer {
             rate,
             commands,
@@ -165,10 +353,20 @@ impl Mixer {
             voices: Vec::with_capacity(VOICE_CAPACITY),
             max_voices: 32,
             serial: 0,
-            buses: (0..MAX_BUSES).map(|_| BusState { volume: Fader::new(1.0), paused: false, gain: 1.0 }).collect(),
+            buses: (0..MAX_BUSES)
+                .map(|_| BusState {
+                    volume: Fader::new(1.0),
+                    paused: false,
+                    gain: 1.0,
+                    effects: empty_chain(),
+                    quiet: u64::MAX,
+                })
+                .collect(),
             master: Fader::new(1.0),
             master_gain: 1.0,
             tmp: vec![0.0; BLOCK * 2],
+            dry: vec![0.0; BLOCK * 2],
+            listener: Listener::default(),
             bus_buf: vec![0.0; MAX_BUSES * BLOCK * 2],
             clock,
         }
@@ -185,7 +383,10 @@ impl Mixer {
 
     fn end(&mut self, i: usize) {
         let v = self.voices.swap_remove(i);
-        let _ = self.ended.send(Ended(v.handle, v.inst));
+        for s in v.effects.into_iter().flatten() {
+            let _ = self.ended.send(Ended::Effect(s.fx));
+        }
+        let _ = self.ended.send(Ended::Voice(v.handle, v.inst));
     }
 
     fn find(&self, h: Handle) -> Option<usize> {
@@ -195,14 +396,25 @@ impl Mixer {
     fn apply(&mut self, cmd: Command) {
         let declick = self.frames(DECLICK_SECONDS).max(1);
         match cmd {
-            Command::Play { handle, mut instance, opts, delay } => {
+            Command::Play {
+                handle,
+                mut instance,
+                opts,
+                delay,
+            } => {
                 if self.voices.len() >= self.max_voices {
                     // replace the oldest voice that is not protected
-                    let oldest = self.voices.iter().enumerate().filter(|(_, v)| !v.protected).min_by_key(|(_, v)| v.serial).map(|(i, _)| i);
+                    let oldest = self
+                        .voices
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, v)| !v.protected)
+                        .min_by_key(|(_, v)| v.serial)
+                        .map(|(i, _)| i);
                     match oldest {
                         Some(i) => self.end(i),
                         None => {
-                            let _ = self.ended.send(Ended(handle, instance));
+                            let _ = self.ended.send(Ended::Voice(handle, instance));
                             return;
                         }
                     }
@@ -210,7 +422,17 @@ impl Mixer {
                 instance.set_looping(opts.looping);
                 instance.set_speed(opts.speed);
                 let bus = (opts.bus.0 as usize).min(MAX_BUSES - 1);
-                let pg = pan_gains(opts.pan);
+                let (pg, dist) = match &opts.spatial {
+                    Some(sp) => {
+                        let a = spatial::apply(sp, &self.listener);
+                        if a.doppler != 1.0 {
+                            instance.set_speed(opts.speed * a.doppler);
+                        }
+                        (a.pan, a.gain)
+                    }
+                    None => (pan_gains(opts.pan), 1.0),
+                };
+                let g = opts.volume * dist;
                 self.serial += 1;
                 self.voices.push(Voice {
                     handle,
@@ -223,9 +445,17 @@ impl Mixer {
                     protected: opts.protected,
                     stop_in: None,
                     // start at full gain: no ramp-in, so attacks stay sharp
-                    gain: if opts.paused { [0.0; 2] } else { [pg[0] * opts.volume, pg[1] * opts.volume] },
+                    gain: if opts.paused {
+                        [0.0; 2]
+                    } else {
+                        [pg[0] * g, pg[1] * g]
+                    },
                     serial: self.serial,
                     delay,
+                    speed: opts.speed,
+                    applied_speed: opts.speed,
+                    spatial: opts.spatial,
+                    effects: empty_chain(),
                 });
             }
             Command::Voice(h, c) => {
@@ -234,7 +464,24 @@ impl Mixer {
                 match c {
                     VoiceCmd::Volume(x) => v.volume.set(x),
                     VoiceCmd::Pan(x) => v.pan = x,
-                    VoiceCmd::Speed(x) => v.inst.set_speed(x),
+                    VoiceCmd::Speed(x) => {
+                        v.speed = x;
+                        if v.spatial.is_none() {
+                            v.applied_speed = x;
+                            v.inst.set_speed(x);
+                        }
+                    }
+                    VoiceCmd::Spatial(sp) => v.spatial = Some(sp),
+                    VoiceCmd::Position(p) => {
+                        if let Some(sp) = v.spatial.as_mut() {
+                            sp.position = p;
+                        }
+                    }
+                    VoiceCmd::Velocity(x) => {
+                        if let Some(sp) = v.spatial.as_mut() {
+                            sp.velocity = x;
+                        }
+                    }
                     VoiceCmd::Looping(x) => v.inst.set_looping(x),
                     VoiceCmd::Protected(x) => v.protected = x,
                     VoiceCmd::Paused(true) => {
@@ -285,6 +532,32 @@ impl Mixer {
                     }
                 }
             }
+            Command::Effect(at, slot, c) => {
+                let chain = match at {
+                    EffectAt::Voice(h) => self.find(h).map(|i| &mut self.voices[i].effects),
+                    EffectAt::Bus(b) => Some(&mut self.buses[b.min(MAX_BUSES - 1)].effects),
+                };
+                let old = match chain {
+                    Some(chain) => chain_cmd(chain, slot, c, self.rate),
+                    // the voice has already ended: send the effect back to be dropped
+                    None => match c {
+                        EffectCmd::Set(fx) => Some(fx),
+                        _ => None,
+                    },
+                };
+                if let Some(fx) = old {
+                    let _ = self.ended.send(Ended::Effect(fx));
+                }
+            }
+            Command::Listener(c) => match c {
+                ListenerCmd::Place(p, f, u) => {
+                    self.listener.position = p;
+                    self.listener.forward = f;
+                    self.listener.up = u;
+                }
+                ListenerCmd::Velocity(v) => self.listener.velocity = v,
+                ListenerCmd::SpeedOfSound(c) => self.listener.speed_of_sound = c,
+            },
             Command::MasterVolume(x) => self.master.set(x),
             Command::MaxVoices(n) => self.max_voices = n.clamp(1, VOICE_CAPACITY),
             Command::StopAll => {
@@ -305,7 +578,9 @@ impl Mixer {
         for chunk in out.chunks_mut(BLOCK * 2) {
             self.render_block(chunk);
         }
-        self.clock.frames.fetch_add((out.len() / 2) as u64, Ordering::Release);
+        self.clock
+            .frames
+            .fetch_add((out.len() / 2) as u64, Ordering::Release);
         self.clock.renders.fetch_add(1, Ordering::Release);
     }
 
@@ -313,7 +588,9 @@ impl Mixer {
         let n = out.len() / 2;
         let len = n * 2;
         let declick = self.frames(DECLICK_SECONDS).max(1);
-        self.bus_buf.fill(0.0);
+        for b in 0..MAX_BUSES {
+            self.bus_buf[b * BLOCK * 2..b * BLOCK * 2 + len].fill(0.0);
+        }
         let mut used = [false; MAX_BUSES];
 
         let mut i = 0;
@@ -333,11 +610,32 @@ impl Mixer {
             let skip = v.delay as usize;
             v.delay = 0;
             let want = n - skip;
+            // 3D: distance, direction and Doppler for this block
+            let (pg, dist) = match &v.spatial {
+                Some(sp) => {
+                    let a = spatial::apply(sp, &self.listener);
+                    let speed = v.speed * a.doppler;
+                    if (speed - v.applied_speed).abs() > 1e-4 * v.applied_speed.abs() {
+                        v.inst.set_speed(speed);
+                        v.applied_speed = speed;
+                    }
+                    (a.pan, a.gain)
+                }
+                None => (pan_gains(v.pan), 1.0),
+            };
             let got = v.inst.render(&mut self.tmp[..want * 2]);
+            if got > 0 && has_effects(&v.effects) {
+                run_chain(
+                    &mut v.effects,
+                    &mut self.tmp[..got * 2],
+                    &mut self.dry,
+                    n as u64,
+                );
+            }
             // volume and pan at the end of this block, ramped from the previous gains
             v.volume.step(n as u64);
-            let pg = pan_gains(v.pan);
-            let target = [pg[0] * v.volume.value, pg[1] * v.volume.value];
+            let g = v.volume.value * dist;
+            let target = [pg[0] * g, pg[1] * g];
             if got > 0 {
                 let inv = 1.0 / got as f32;
                 let (dl, dr) = ((target[0] - v.gain[0]) * inv, (target[1] - v.gain[1]) * inv);
@@ -383,20 +681,48 @@ impl Mixer {
             }
         }
 
-        // buses -> master
-        out.fill(0.0);
-        for (b, bus) in self.buses.iter_mut().enumerate() {
+        // buses -> main bus -> output. The other buses flow into the main bus, so effects and
+        // volume on the main bus apply to everything.
+        let rate = self.rate as f32;
+        for b in (0..MAX_BUSES).rev() {
+            let bus = &mut self.buses[b];
             bus.volume.step(n as u64);
             let target = bus.volume.value;
-            if used[b] {
-                let src = &self.bus_buf[b * BLOCK * 2..b * BLOCK * 2 + len];
+            let mut active = used[b];
+            if has_effects(&bus.effects) {
+                if active {
+                    bus.quiet = 0;
+                } else if (bus.quiet as f32) < chain_tail(&bus.effects) * rate + BLOCK as f32 {
+                    // no new sound, but an echo or reverb is still ringing
+                    bus.quiet = bus.quiet.saturating_add(n as u64);
+                    active = true;
+                }
+                if active {
+                    let src = &mut self.bus_buf[b * BLOCK * 2..b * BLOCK * 2 + len];
+                    run_chain(&mut bus.effects, src, &mut self.dry, n as u64);
+                }
+            }
+            if active {
                 let d = (target - bus.gain) / n as f32;
                 let mut g = bus.gain;
-                for (o, s) in out.chunks_exact_mut(2).zip(src.chunks_exact(2)) {
-                    g += d;
-                    o[0] += s[0] * g;
-                    o[1] += s[1] * g;
+                let (main, rest) = self.bus_buf.split_at_mut(BLOCK * 2);
+                if b == 0 {
+                    for (o, s) in out.chunks_exact_mut(2).zip(main.chunks_exact(2)) {
+                        g += d;
+                        o[0] = s[0] * g;
+                        o[1] = s[1] * g;
+                    }
+                } else {
+                    let src = &rest[(b - 1) * BLOCK * 2..(b - 1) * BLOCK * 2 + len];
+                    for (o, s) in main[..len].chunks_exact_mut(2).zip(src.chunks_exact(2)) {
+                        g += d;
+                        o[0] += s[0] * g;
+                        o[1] += s[1] * g;
+                    }
+                    used[0] = true;
                 }
+            } else if b == 0 {
+                out.fill(0.0);
             }
             bus.gain = target;
         }
