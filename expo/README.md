@@ -67,7 +67,14 @@ Long music in OGG / MP3: `FA.stream(uri)` decodes while playing and uses little 
 
 ## Test app and automatic tests
 
-`example/` is an Expo SDK 57 app with this module in `modules/feather-audio`, as in a game. On start it checks the engine by itself (start, OGG / MP3 / MP2 load and play, the engine clock moving, which means the audio output runs) and shows and logs the result (`FEATHERAUDIO_SELFTEST PASS / FAIL`); buttons play sounds, a loop, reverb and a low-pass.
+`example/` is an Expo SDK 57 app with this module in `modules/feather-audio`, as in a game, laid out like a game's audio:
+
+- music (on a music bus): a tracker module (MOD), OGG or MP3 (streamed), volume, muffle (a pause menu), pause
+- sound effects (on an effects bus): varied pitch and pan, rapid fire (20 shots and 4 explosions: many loud sounds at once, kept from crackling by the limiter), echo
+- 3D (with headphones): a car driving past (Doppler shift), chimes left, in front, right and behind
+- everything: reverb, stop all
+
+On start it checks the engine by itself (start, every file loads, sounds play together, the engine clock moves, which means the audio output runs) and shows and logs the result (`FEATHERAUDIO_SELFTEST PASS / FAIL`). Every sound is synthesized by `make-sounds.py` (`sounds/`).
 
 ```sh
 expo/build-mobile.sh          # Windows: expo\build-mobile.ps1

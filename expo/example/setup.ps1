@@ -9,8 +9,7 @@ New-Item -ItemType Directory -Force -Path $dst, (Join-Path $here 'assets') | Out
 foreach ($f in 'package.json', 'expo-module.config.json', 'FeatherAudio.podspec', 'src', 'ios', 'android') {
   Copy-Item -Recurse (Join-Path $mod $f) $dst
 }
-# Android keeps assets as resources named without the extension: the names must differ
-foreach ($e in 'ogg', 'mp3', 'mp2') {
-  Copy-Item (Join-Path $mod "..\tests\data\stereo.$e") (Join-Path $here "assets\test_$e.$e")
-}
+# the test sounds (made by make-sounds.py). Android keeps assets as resources named without
+# the extension: the names must differ in more than that.
+Copy-Item (Join-Path $here 'sounds\*') (Join-Path $here 'assets')
 Write-Host 'module and test sounds in place'
