@@ -11,14 +11,14 @@ import { Asset } from "expo-asset";
 import * as FA from "./modules/feather-audio/src";
 
 const files = {
-  song: require("./assets/song.mod"),
-  musicOgg: require("./assets/music_ogg.ogg"),
-  musicMp3: require("./assets/music_mp3.mp3"),
-  pew: require("./assets/pew.wav"),
-  coin: require("./assets/coin.wav"),
-  boom: require("./assets/boom.wav"),
-  chime: require("./assets/chime.wav"),
-  engine: require("./assets/engine.wav"),
+  song: require("./sounds/song.mod"),
+  musicOgg: require("./sounds/music_ogg.ogg"),
+  musicMp3: require("./sounds/music_mp3.mp3"),
+  pew: require("./sounds/pew.wav"),
+  coin: require("./sounds/coin.wav"),
+  boom: require("./sounds/boom.wav"),
+  chime: require("./sounds/chime.wav"),
+  engine: require("./sounds/engine.wav"),
 };
 type Name = keyof typeof files;
 type MusicKind = "song" | "musicOgg" | "musicMp3";

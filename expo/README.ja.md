@@ -85,17 +85,15 @@ npm install
 npx expo run:android          # または npx expo run:ios
 ```
 
-iPhone の実機には EAS Build で入れられます（preview＝JS を中に入れた単体で動くビルド、internal 配布）。`EAS_NO_VCS=1` で、このフォルダだけを（git の除外を使わず `.easignore` に従って）送ります：
+iPhone の実機には EAS Build で入れられます（preview＝JS を中に入れた単体で動くビルド、internal 配布）。`eas-build.ps1` がモジュールをコピーし、`EAS_NO_VCS=1` でこのフォルダだけを（git の除外ではなく `.easignore` に従って）送ります。git のルールのままだと、git に入れていないモジュールが送られません：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File expo\build-mobile.ps1
 cd expo\example
-.\setup.ps1
-npm install
-$env:EAS_NO_VCS = "1"
-npx eas-cli init                                  # 初回だけ：Expo のアカウントにプロジェクトを作る
-npx eas-cli device:create                         # まだ登録していない iPhone があれば
-npx eas-cli build -p ios --profile preview
+npm.cmd install
+$env:EAS_NO_VCS = "1"; npx.cmd eas-cli init       # 初回だけ：Expo のアカウントにプロジェクトを作る
+npx.cmd eas-cli device:create                     # まだ登録していない iPhone があれば
+powershell -ExecutionPolicy Bypass -File .\eas-build.ps1          # Android は .\eas-build.ps1 android
 ```
 
 GitHub Actions（`.github/workflows/mobile.yml`）が、push のたびにこのアプリを Android（Release APK、エミュレーターで実行）と iOS（シミュレーター向け、実行）でビルドして自己テストを確かめます。APK は実行結果のページから `featheraudio-test-android` としてダウンロードでき、そのまま Android の実機に入れられます。

@@ -1,6 +1,6 @@
-# Used by EAS Build instead of .gitignore: the module (modules/feather-audio, with the
-# static libraries) and the test sounds (assets/) must be uploaded, though git ignores them.
-node_modules/
-android/
-ios/
-.expo/
+# Used by EAS Build instead of .gitignore (with EAS_NO_VCS=1, see eas-build.ps1): the module
+# copied into modules/feather-audio (with the static libraries) must be uploaded.
+/node_modules/
+/android/
+/ios/
+/.expo/

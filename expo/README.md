@@ -84,17 +84,15 @@ npm install
 npx expo run:android          # or npx expo run:ios
 ```
 
-A real iPhone gets it through EAS Build (preview: a standalone build with the JS inside, internal distribution). `EAS_NO_VCS=1` uploads this folder only, following `.easignore` instead of git's ignore rules:
+A real iPhone gets it through EAS Build (preview: a standalone build with the JS inside, internal distribution). `eas-build.ps1` copies the module in and uploads this folder only (`EAS_NO_VCS=1`, following `.easignore` instead of git's ignore rules, which would leave out the module):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File expo\build-mobile.ps1
 cd expo\example
-.\setup.ps1
-npm install
-$env:EAS_NO_VCS = "1"
-npx eas-cli init                                  # once: creates the project in your Expo account
-npx eas-cli device:create                         # if an iPhone is not registered yet
-npx eas-cli build -p ios --profile preview
+npm.cmd install
+$env:EAS_NO_VCS = "1"; npx.cmd eas-cli init       # once: creates the project in your Expo account
+npx.cmd eas-cli device:create                     # if an iPhone is not registered yet
+powershell -ExecutionPolicy Bypass -File .\eas-build.ps1          # Android: .\eas-build.ps1 android
 ```
 
 GitHub Actions (`.github/workflows/mobile.yml`) builds this app on every push for Android (release APK, run on an emulator) and iOS (simulator build, run) and checks the self-test. The APK can be downloaded from the run's page as `featheraudio-test-android` and installs on a real Android phone as it is.
