@@ -24,8 +24,12 @@
 //! audio thread. They only talk through queues, so the audio thread never waits for the game.
 
 mod audio;
+#[cfg_attr(not(any(feature = "ogg", feature = "mp3")), allow(dead_code))]
+mod decode;
 mod mixer;
 mod source;
+#[cfg(any(feature = "ogg", feature = "mp3"))]
+mod stream;
 #[cfg(any(feature = "mod", feature = "it", feature = "xm"))]
 pub mod tracker;
 mod wav;
@@ -33,6 +37,8 @@ mod wav;
 pub use audio::{Audio, Bus, Handle, PlayOptions};
 pub use mixer::Mixer;
 pub use source::{Instance, Source};
+#[cfg(any(feature = "ogg", feature = "mp3"))]
+pub use stream::Stream;
 #[cfg(any(feature = "mod", feature = "it", feature = "xm"))]
 pub use tracker::Tracker;
 pub use wav::Wav;

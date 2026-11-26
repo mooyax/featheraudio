@@ -1,10 +1,11 @@
 //! The game-side half of the engine.
 
-use crate::mixer::{BusCmd, Command, Ended, Mixer, VoiceCmd, MAX_BUSES};
+use crate::mixer::{BusCmd, Clock, Command, Ended, Mixer, VoiceCmd, MAX_BUSES};
 use crate::source::Source;
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Identifies one playing sound. Stays valid after the sound ends (calls on it then do
 /// nothing), and is never reused.
@@ -22,7 +23,7 @@ impl Bus {
 }
 
 /// How to play a sound. `PlayOptions::new()` is: volume 1, centred, normal speed, no loop,
-/// not paused, on [`Bus::MAIN`], not protected.
+/// not paused, on [`Bus::MAIN`], not protected, no delay.
 #[derive(Clone, Copy, Debug)]
 pub struct PlayOptions {
     pub volume: f32,
@@ -36,11 +37,13 @@ pub struct PlayOptions {
     pub bus: Bus,
     /// protected voices are never replaced when all voices are in use (use it for music)
     pub protected: bool,
+    /// seconds of silence before the sound starts (sample-accurate)
+    pub delay: f32,
 }
 
 impl Default for PlayOptions {
     fn default() -> Self {
-        PlayOptions { volume: 1.0, pan: 0.0, speed: 1.0, looping: false, paused: false, bus: Bus::MAIN, protected: false }
+        PlayOptions { volume: 1.0, pan: 0.0, speed: 1.0, looping: false, paused: false, bus: Bus::MAIN, protected: false, delay: 0.0 }
     }
 }
 
@@ -76,6 +79,10 @@ impl PlayOptions {
         self.protected = p;
         self
     }
+    pub fn delay(mut self, seconds: f32) -> Self {
+        self.delay = seconds;
+        self
+    }
 }
 
 struct Front {
@@ -85,6 +92,9 @@ struct Front {
     next_bus: u16,
     /// voices that have been started and not reported as ended
     alive: HashSet<Handle>,
+    /// play_clocked: (mixer render count, game time) of the first clocked sound in the
+    /// current audio buffer
+    clocked: Option<(u64, f64)>,
 }
 
 impl Front {
@@ -100,6 +110,7 @@ impl Front {
 /// every call only queues a command for the audio thread.
 pub struct Audio {
     front: Mutex<Front>,
+    clock: Arc<Clock>,
     rate: u32,
     #[cfg(feature = "cpal")]
     _output: Option<crate::audio::cpal_output::Output>,
@@ -111,8 +122,10 @@ impl Audio {
     pub fn new() -> Result<Audio, crate::Error> {
         let (cmd_tx, cmd_rx) = channel();
         let (end_tx, end_rx) = channel();
-        let (output, rate) = cpal_output::Output::start(move |rate| Mixer::new(rate, cmd_rx, end_tx))?;
-        Ok(Audio { front: Mutex::new(Front::new(cmd_tx, end_rx)), rate, _output: Some(output) })
+        let clock = Arc::new(Clock::default());
+        let c = clock.clone();
+        let (output, rate) = cpal_output::Output::start(move |rate| Mixer::new(rate, cmd_rx, end_tx, c))?;
+        Ok(Audio { front: Mutex::new(Front::new(cmd_tx, end_rx)), clock, rate, _output: Some(output) })
     }
 
     /// Creates the engine without opening a device: you get the [`Mixer`] and call
@@ -120,13 +133,15 @@ impl Audio {
     pub fn with_manual_output(rate: u32) -> (Audio, Mixer) {
         let (cmd_tx, cmd_rx) = channel();
         let (end_tx, end_rx) = channel();
+        let clock = Arc::new(Clock::default());
         let audio = Audio {
             front: Mutex::new(Front::new(cmd_tx, end_rx)),
+            clock: clock.clone(),
             rate,
             #[cfg(feature = "cpal")]
             _output: None,
         };
-        (audio, Mixer::new(rate, cmd_rx, end_tx))
+        (audio, Mixer::new(rate, cmd_rx, end_tx, clock))
     }
 
     /// The output sample rate in Hz.
@@ -154,15 +169,53 @@ impl Audio {
 
     /// Plays a sound with the given options.
     pub fn play_with(&self, source: &dyn Source, opts: PlayOptions) -> Handle {
+        let mut f = self.front();
+        self.start(&mut f, source, opts, 0)
+    }
+
+    fn start(&self, f: &mut Front, source: &dyn Source, opts: PlayOptions, extra_delay: u64) -> Handle {
         // the instance is created (and allocated) here, on the game side
         let instance = source.instance(self.rate);
-        let mut f = self.front();
         f.collect();
         f.next_handle = f.next_handle.wrapping_add(1).max(1);
         let handle = Handle(f.next_handle);
         f.alive.insert(handle);
-        let _ = f.commands.send(Command::Play { handle, instance, opts });
+        let delay = (opts.delay.max(0.0) as f64 * self.rate as f64).round() as u64 + extra_delay;
+        let _ = f.commands.send(Command::Play { handle, instance, opts, delay });
         handle
+    }
+
+    /// Plays a sound at a moment in game time (seconds, any clock you like, e.g. your physics
+    /// time). Several sounds started during one audio buffer are spread out by the
+    /// differences between their times, instead of all starting together at the next buffer:
+    /// rapid fire stays evenly spaced whatever the buffer size. Like SoLoud's `playClocked`.
+    pub fn play_clocked(&self, time: f64, source: &dyn Source) -> Handle {
+        self.play_clocked_with(time, source, PlayOptions::default())
+    }
+
+    /// [`play_clocked`](Self::play_clocked) with options.
+    pub fn play_clocked_with(&self, time: f64, source: &dyn Source, opts: PlayOptions) -> Handle {
+        let renders = self.clock.renders.load(Ordering::Acquire);
+        let mut f = self.front();
+        let offset = match f.clocked {
+            // a later sound in the same buffer: start it as much later as its time is
+            Some((r, t0)) if r == renders && time >= t0 => {
+                // at most a quarter of a second, in case the game stalled
+                ((time - t0) * self.rate as f64).round().min(self.rate as f64 / 4.0) as u64
+            }
+            _ => {
+                f.clocked = Some((renders, time));
+                0
+            }
+        };
+        self.start(&mut f, source, opts, offset)
+    }
+
+    /// Seconds of audio the mixer has produced so far: the engine's clock. Advances in steps
+    /// of one audio buffer. Combine with [`PlayOptions::delay`] to start sounds at exact
+    /// moments, e.g. on the beat.
+    pub fn time(&self) -> f64 {
+        self.clock.frames.load(Ordering::Acquire) as f64 / self.rate as f64
     }
 
     /// Stops a sound (with a few milliseconds of fade-out, to avoid a click).
@@ -268,7 +321,7 @@ impl Audio {
 
 impl Front {
     fn new(commands: Sender<Command>, ended: Receiver<Ended>) -> Front {
-        Front { commands, ended, next_handle: 0, next_bus: 0, alive: HashSet::new() }
+        Front { commands, ended, next_handle: 0, next_bus: 0, alive: HashSet::new(), clocked: None }
     }
 }
 

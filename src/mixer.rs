@@ -4,7 +4,9 @@
 
 use crate::source::Instance;
 use crate::{Bus, Handle, PlayOptions};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Arc;
 
 /// frames mixed per step
 const BLOCK: usize = 256;
@@ -16,7 +18,8 @@ pub(crate) const VOICE_CAPACITY: usize = 256;
 const DECLICK_SECONDS: f32 = 0.005;
 
 pub(crate) enum Command {
-    Play { handle: Handle, instance: Box<dyn Instance>, opts: PlayOptions },
+    /// `delay`: frames of silence before the sound starts
+    Play { handle: Handle, instance: Box<dyn Instance>, opts: PlayOptions, delay: u64 },
     Voice(Handle, VoiceCmd),
     Bus(Bus, BusCmd),
     MasterVolume(f32),
@@ -43,6 +46,15 @@ pub(crate) enum BusCmd {
     Fade(f32, f32),
     Paused(bool),
     Stop,
+}
+
+/// How far the mixer has got, readable from the game side.
+#[derive(Default)]
+pub(crate) struct Clock {
+    /// calls to [`Mixer::render`]
+    pub renders: AtomicU64,
+    /// frames rendered in total
+    pub frames: AtomicU64,
 }
 
 /// Sent back to [`Audio`](crate::Audio): the voice has ended (finished, stopped or was
@@ -106,6 +118,8 @@ struct Voice {
     gain: [f32; 2],
     /// play order, for replacing the oldest voice when all are in use
     serial: u64,
+    /// frames to wait before starting
+    delay: u64,
 }
 
 struct BusState {
@@ -132,6 +146,7 @@ pub struct Mixer {
     master_gain: f32,
     tmp: Vec<f32>,
     bus_buf: Vec<f32>,
+    clock: Arc<Clock>,
 }
 
 /// Balance pan law: centre keeps both channels at full level (so stereo sources are not
@@ -142,7 +157,7 @@ fn pan_gains(pan: f32) -> [f32; 2] {
 }
 
 impl Mixer {
-    pub(crate) fn new(rate: u32, commands: Receiver<Command>, ended: Sender<Ended>) -> Mixer {
+    pub(crate) fn new(rate: u32, commands: Receiver<Command>, ended: Sender<Ended>, clock: Arc<Clock>) -> Mixer {
         Mixer {
             rate,
             commands,
@@ -155,6 +170,7 @@ impl Mixer {
             master_gain: 1.0,
             tmp: vec![0.0; BLOCK * 2],
             bus_buf: vec![0.0; MAX_BUSES * BLOCK * 2],
+            clock,
         }
     }
 
@@ -164,7 +180,7 @@ impl Mixer {
     }
 
     fn frames(&self, secs: f32) -> u64 {
-        (secs.max(0.0) as f64 * self.rate as f64) as u64
+        (secs.max(0.0) as f64 * self.rate as f64).round() as u64
     }
 
     fn end(&mut self, i: usize) {
@@ -179,7 +195,7 @@ impl Mixer {
     fn apply(&mut self, cmd: Command) {
         let declick = self.frames(DECLICK_SECONDS).max(1);
         match cmd {
-            Command::Play { handle, mut instance, opts } => {
+            Command::Play { handle, mut instance, opts, delay } => {
                 if self.voices.len() >= self.max_voices {
                     // replace the oldest voice that is not protected
                     let oldest = self.voices.iter().enumerate().filter(|(_, v)| !v.protected).min_by_key(|(_, v)| v.serial).map(|(i, _)| i);
@@ -209,6 +225,7 @@ impl Mixer {
                     // start at full gain: no ramp-in, so attacks stay sharp
                     gain: if opts.paused { [0.0; 2] } else { [pg[0] * opts.volume, pg[1] * opts.volume] },
                     serial: self.serial,
+                    delay,
                 });
             }
             Command::Voice(h, c) => {
@@ -234,11 +251,11 @@ impl Mixer {
                         v.paused = false;
                     }
                     VoiceCmd::Fade(to, secs) => {
-                        let n = (secs.max(0.0) as f64 * self.rate as f64) as u64;
+                        let n = (secs.max(0.0) as f64 * self.rate as f64).round() as u64;
                         v.volume.fade(to, n);
                     }
                     VoiceCmd::StopAfter(secs) => {
-                        let n = (secs.max(0.0) as f64 * self.rate as f64) as u64;
+                        let n = (secs.max(0.0) as f64 * self.rate as f64).round() as u64;
                         v.stop_in = Some(n.max(declick));
                     }
                     VoiceCmd::Stop => {
@@ -288,6 +305,8 @@ impl Mixer {
         for chunk in out.chunks_mut(BLOCK * 2) {
             self.render_block(chunk);
         }
+        self.clock.frames.fetch_add((out.len() / 2) as u64, Ordering::Release);
+        self.clock.renders.fetch_add(1, Ordering::Release);
     }
 
     fn render_block(&mut self, out: &mut [f32]) {
@@ -305,7 +324,16 @@ impl Mixer {
                 i += 1;
                 continue;
             }
-            let got = v.inst.render(&mut self.tmp[..len]);
+            // a delayed start: silence for the first `delay` frames
+            if v.delay >= n as u64 {
+                v.delay -= n as u64;
+                i += 1;
+                continue;
+            }
+            let skip = v.delay as usize;
+            v.delay = 0;
+            let want = n - skip;
+            let got = v.inst.render(&mut self.tmp[..want * 2]);
             // volume and pan at the end of this block, ramped from the previous gains
             v.volume.step(n as u64);
             let pg = pan_gains(v.pan);
@@ -314,7 +342,7 @@ impl Mixer {
                 let inv = 1.0 / got as f32;
                 let (dl, dr) = ((target[0] - v.gain[0]) * inv, (target[1] - v.gain[1]) * inv);
                 let (mut gl, mut gr) = (v.gain[0], v.gain[1]);
-                let base = v.bus * BLOCK * 2;
+                let base = v.bus * BLOCK * 2 + skip * 2;
                 let dst = &mut self.bus_buf[base..base + got * 2];
                 for (d, s) in dst.chunks_exact_mut(2).zip(self.tmp.chunks_exact(2)) {
                     gl += dl;
@@ -335,7 +363,7 @@ impl Mixer {
                     v.pausing = Some((left - n as u64, restore));
                 }
             }
-            let mut finished = got < n;
+            let mut finished = got < want;
             if let Some(left) = v.stop_in.as_mut() {
                 if *left <= n as u64 {
                     finished = true;

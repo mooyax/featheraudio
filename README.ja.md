@@ -9,25 +9,30 @@ Rust だけで書いた、ゲーム向けの羽のように軽いオーディオ
 - **バス**（BGM・効果音・UI など）：まとめて音量・フェード・一時停止できます。
 - **同時発音数の上限**と保護：全部使っているときは、保護されていない一番古い音が場所を譲ります。
 - **トラッカー音楽**（MOD / IT / S3M / XM）：エンジンを内蔵していて、効果音と一緒に混ぜます。形式ごとに feature が分かれているので、使うエンジンだけを入れられます。同じエンジンで [modplay](https://github.com/mooyax/modplay-rs) プレイヤーも動いています。
-- **WAV** の読み込み（8 / 16 / 24 / 32 ビット整数、32 / 64 ビット浮動小数点）。
+- **WAV・OGG Vorbis・MP3**：`Wav` はファイルを全部メモリに展開します（効果音向け）。`Stream` は鳴らしながら少しずつ展開します（BGM 向け。全部展開するとステレオ 1 分で 23 MB になります）。60 秒の曲を展開しながら鳴らしても、CPU は 1 コアの 0.1% ほどです。
+- **サンプル単位で正確なタイミング**：`play_clocked` は、1 回の音声バッファの間に鳴らし始めた音を、ゲームの時刻の差のとおりにずらします（バッファの大きさによらず連射の間隔がそろいます）。`PlayOptions::delay` でちょうど N 秒後に鳴らし始められ、`Audio::time()` でエンジンの時計が読めます。
 - **プチッというノイズが出ない**：音量の変化はなめらかにつなぎ、停止や一時停止も数ミリ秒でフェードアウトします。
 - **リアルタイムでも安全なミキシング**：音を作るスレッドはロックもメモリ確保もしません。ゲーム側とミキサーはキューだけでやり取りし、鳴り終わった音の後片付けはゲーム側で行います。
 - **出力先を選べる**：[cpal](https://github.com/RustAudio/cpal) で既定の音声デバイスに出すか、`Mixer::render` を自分で呼びます（独自のオーディオコールバック、WebAssembly、ファイルへの書き出し、テストなど）。
 
-状況：作り始めたところです（[計画](#計画)の第 1 段階）。API はまだ変わることがあります。
+状況：作り始めたところです（[計画](#計画)の第 2 段階まで完了）。API はまだ変わることがあります。
 
 ## 使い方
 
 ```rust
-use featheraudio::{Audio, PlayOptions, Tracker, Wav};
+use featheraudio::{Audio, PlayOptions, Stream, Tracker, Wav};
 
 let audio = Audio::new()?;                         // 既定の音声デバイス
-let pew = Wav::from_bytes(&std::fs::read("pew.wav")?)?;
+let pew = Wav::from_bytes(&std::fs::read("pew.ogg")?)?;  // WAV・OGG・MP3
 audio.play(&pew);                                  // 鳴らしたら放っておく
+audio.play_clocked(game_time, &pew);               // 連射しても間隔がそろう
 
 let music = audio.create_bus().unwrap();
 let song = Tracker::from_bytes(&std::fs::read("song.xm")?)?;
 let bgm = audio.play_with(&song, PlayOptions::new().bus(music).protected(true));
+
+let theme = Stream::from_vec(std::fs::read("theme.ogg")?)?; // 鳴らしながら展開
+audio.play_with(&theme, PlayOptions::new().bus(music).looping(true).delay(1.0));
 
 audio.fade_bus_volume(music, 0.4, 0.5);            // ムービー中は BGM を下げる
 audio.fade_volume(bgm, 0.0, 2.0);                  // あとでフェードアウトして
@@ -47,8 +52,9 @@ mixer.render(&mut buf);
 
 ```
 cargo run --release --example play -- sound.wav    # ファイルを既定のデバイスで鳴らす
+cargo run --release --example play -- music.ogg    # OGG・MP3 は鳴らしながら展開
 cargo run --release --example play -- song.it      # 曲は Enter を押すまでループ
-cargo run --release --example demo -- [song.xm]    # 短いデモを demo.wav に書き出す
+cargo run --release --example demo -- [music]      # 短いデモを demo.wav に書き出す
 ```
 
 ## 機能（Cargo の features）
@@ -56,6 +62,8 @@ cargo run --release --example demo -- [song.xm]    # 短いデモを demo.wav �
 | 名前 | 既定 | 追加されるもの |
 |---|---|---|
 | `cpal` | 有効 | `Audio::new()`：cpal で既定のデバイスに出力 |
+| `ogg` | 有効 | `Wav` と `Stream` で OGG Vorbis を読む（[lewton](https://github.com/RustAudio/lewton) を使用）— 約 140 KB |
+| `mp3` | 有効 | `Wav` と `Stream` で MP3 を読む（minimp3 を Rust に移した [nanomp3](https://crates.io/crates/nanomp3) を使用）— 約 60 KB |
 | `tracker` | 有効 | 下の 3 つのトラッカーエンジンすべて |
 | `mod` | （`tracker` で有効） | ProTracker の MOD エンジン。pt2-clone の移植で、出力は元と完全に同じ — 約 45 KB |
 | `it` | （`tracker` で有効） | Impulse Tracker の IT と Scream Tracker 3 の S3M のエンジン — 約 100 KB |
@@ -67,15 +75,15 @@ cargo run --release --example demo -- [song.xm]    # 短いデモを demo.wav �
 
 ## しくみ
 
-- **音源**（`Wav`、`Tracker`、または `Source` を実装した自分の型）がデータを持ちます。`play` のたびにそこから新しい**インスタンス**が作られるので、1 つの音源を同時に何回でも、重ねてでも鳴らせます。
+- **音源**（`Wav`、`Stream`、`Tracker`、または `Source` を実装した自分の型）がデータを持ちます。`play` のたびにそこから新しい**インスタンス**が作られるので、1 つの音源を同時に何回でも、重ねてでも鳴らせます。
 - `Audio` はゲーム側です。`Send + Sync` で、どの呼び出しも命令をキューに入れるだけです。
-- `Mixer` は音を作る側です。オーディオコールバックの中で動き、届いた命令を反映して音を混ぜます。
+- `Mixer` は音を作る側です。オーディオコールバックの中で動き、届いた命令を反映して音を混ぜます。ロックもメモリ確保もしません（`Stream` の展開だけは小さなメモリ確保をします）。
 - 自分の音源を作るには、`Source::instance` と `Instance::render` を実装します（左右交互のステレオで埋め、終わったら頼まれたより少ないフレーム数を返します）。
 
 ## 計画
 
 1. **コア**（完了）：ボイス、ハンドル、バス、フェード、同時発音数の上限、WAV、トラッカー音楽（エンジン内蔵、形式ごとの feature）
-2. OGG / MP3 の読み込み、`play_clocked`（1 つのオーディオバッファの中でも、ゲームの時刻どおりに音を鳴らし始める）
+2. **形式とタイミング**（完了）：OGG / MP3（全部展開と、鳴らしながら展開）、`play_clocked`、遅らせて鳴らす、エンジンの時計
 3. エフェクト：ローパス／ハイパスフィルタ、エコー、リバーブ、簡易 3D 定位
 4. C API（Expo / Flutter / Unity などから使う）、iOS / Android 向けのつなぎ、WebAssembly のデモ
 
@@ -84,7 +92,7 @@ cargo run --release --example demo -- [song.xm]    # 短いデモを demo.wav �
 - [SoLoud](https://solhsa.com/soloud/)（Jari Komppa 氏）— API と「鳴らしたら放っておく」考え方のお手本です。SoLoud のコードは使っていません。
 - [pt2-clone](https://github.com/8bitbubsy/pt2-clone) と [ft2-clone](https://github.com/8bitbubsy/ft2-clone)（Olav Sørensen 氏 / 8bitbubsy）— MOD と XM のエンジンは、それぞれの再生部分の移植です。
 - [OpenMPT / libopenmpt](https://openmpt.org/) — IT・S3M エンジンの答え合わせの基準です。レゾナンスフィルタや音量の表は OpenMPT に合わせています。
-- [cpal](https://github.com/RustAudio/cpal) — 音声出力。
+- [cpal](https://github.com/RustAudio/cpal) — 音声出力。[lewton](https://github.com/RustAudio/lewton) — OGG Vorbis。[nanomp3](https://crates.io/crates/nanomp3)（[minimp3](https://github.com/lieff/minimp3) の移植）— MP3。
 
 ## ライセンス
 

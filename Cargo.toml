@@ -10,9 +10,13 @@ keywords = ["audio", "gamedev", "sound", "mixer", "tracker"]
 categories = ["multimedia::audio", "game-development"]
 
 [features]
-default = ["cpal", "tracker"]
+default = ["cpal", "tracker", "ogg", "mp3"]
 # audio output through cpal (Windows / macOS / Linux / Android / iOS); without it, call Mixer::render yourself
 cpal = ["dep:cpal"]
+# OGG Vorbis decoding (lewton), about 140 KB
+ogg = ["dep:lewton"]
+# MP3 decoding (nanomp3, a pure Rust port of minimp3), about 60 KB
+mp3 = ["dep:nanomp3"]
 # tracker music: all three engines
 tracker = ["mod", "it", "xm"]
 # ProTracker MOD engine (port of pt2-clone), about 45 KB
@@ -24,6 +28,8 @@ xm = []
 
 [dependencies]
 cpal = { version = "0.15", optional = true }
+lewton = { version = "0.10", optional = true }
+nanomp3 = { version = "0.2", optional = true, default-features = false, features = ["std"] }
 
 [profile.release]
 opt-level = 3

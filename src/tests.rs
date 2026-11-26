@@ -139,3 +139,107 @@ fn tracker_music_on_a_bus() {
     assert!(out[out.len() - 200..].iter().all(|x| x.abs() < 1e-6), "faded out");
     assert!(a.is_playing(h), "the song keeps playing (silently) until stopped");
 }
+
+#[test]
+fn delay_and_engine_time() {
+    let (a, mut m) = Audio::with_manual_output(RATE);
+    assert_eq!(a.time(), 0.0);
+    a.play_with(&dc(0.5, 1.0), PlayOptions::new().delay(0.01));
+    let out = render(&mut m, 0.02);
+    let start = out.chunks(2).position(|c| c[0] != 0.0).unwrap();
+    assert_eq!(start, 480, "starts exactly 10 ms (480 frames) late");
+    assert!((a.time() - 0.02).abs() < 1e-9);
+}
+
+#[test]
+fn play_clocked_spreads_sounds_within_a_buffer() {
+    let (a, mut m) = Audio::with_manual_output(RATE);
+    let s = dc(0.1, 1.0);
+    // three shots 5 ms apart in game time, all requested before the next buffer
+    a.play_clocked(10.000, &s);
+    a.play_clocked(10.005, &s);
+    a.play_clocked(10.010, &s);
+    let out = render(&mut m, 0.02);
+    let level = |f: usize| (out[f * 2] * 10.0).round() as i32;
+    assert_eq!((level(0), level(239), level(240), level(479), level(480)), (1, 1, 2, 2, 3));
+    // in the next buffer a new clocked sound starts right away again
+    a.play_clocked(10.5, &s);
+    let out = render(&mut m, 0.01);
+    assert_eq!((out[0] * 10.0).round() as i32, 4);
+}
+
+#[cfg(any(feature = "ogg", feature = "mp3"))]
+fn sine_check(w: &Wav, rate: u32) {
+    assert_eq!(w.sample_rate(), rate);
+    assert!((w.duration() - 0.25).abs() < 0.03, "duration {}", w.duration());
+    // 440 Hz: about 2 * 440 * 0.25 = 220 zero crossings
+    let (a, mut m) = Audio::with_manual_output(rate);
+    a.play(w);
+    let mut out = vec![0.0; (rate as usize / 5) * 2];
+    m.render(&mut out);
+    let left: Vec<f32> = out.chunks(2).map(|c| c[0]).collect();
+    let crossings = left.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
+    assert!((170..=180).contains(&crossings), "crossings in 0.2 s: {crossings}");
+    let rms = (left.iter().map(|x| x * x).sum::<f32>() / left.len() as f32).sqrt();
+    assert!((rms - 0.088).abs() < 0.01, "rms {rms}");
+}
+
+#[cfg(feature = "ogg")]
+#[test]
+fn loads_ogg() {
+    let w = Wav::from_bytes(include_bytes!("../tests/data/tone.ogg")).unwrap();
+    assert_eq!(w.channels(), 1);
+    sine_check(&w, 22050);
+    let s = Wav::from_bytes(include_bytes!("../tests/data/stereo.ogg")).unwrap();
+    assert_eq!((s.channels(), s.sample_rate()), (2, 44100));
+}
+
+#[cfg(feature = "mp3")]
+#[test]
+fn loads_mp3() {
+    let w = Wav::from_bytes(include_bytes!("../tests/data/tone.mp3")).unwrap();
+    assert_eq!(w.channels(), 1);
+    sine_check(&w, 22050);
+}
+
+#[cfg(any(feature = "ogg", feature = "mp3"))]
+fn stream_matches_wav(bytes: &[u8]) {
+    // streamed and fully decoded give the same samples
+    let w = Wav::from_bytes(bytes).unwrap();
+    let s = Stream::from_bytes(bytes).unwrap();
+    let mut wi = w.instance(RATE);
+    let mut si = s.instance(RATE);
+    let mut a = vec![0.0; RATE as usize];
+    let mut b = vec![0.0; RATE as usize];
+    let (na, nb) = (wi.render(&mut a), si.render(&mut b));
+    assert_eq!(na, nb, "same length");
+    assert!(na > RATE as usize / 5);
+    let maxd = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max);
+    assert!(maxd < 1e-5, "max difference {maxd}");
+    // looping keeps going
+    let mut si = s.instance(RATE);
+    si.set_looping(true);
+    let mut big = vec![0.0; RATE as usize * 2];
+    assert_eq!(si.render(&mut big), RATE as usize, "a looping stream fills the whole second");
+    assert!(big[big.len() - 4000..].iter().any(|x| x.abs() > 0.01), "still sounding after the loop");
+}
+
+#[cfg(feature = "ogg")]
+#[test]
+fn streams_ogg() {
+    stream_matches_wav(include_bytes!("../tests/data/tone.ogg"));
+    stream_matches_wav(include_bytes!("../tests/data/stereo.ogg"));
+}
+
+#[cfg(feature = "mp3")]
+#[test]
+fn streams_mp3() {
+    stream_matches_wav(include_bytes!("../tests/data/tone.mp3"));
+}
+
+#[test]
+fn unsupported_formats_are_errors() {
+    assert!(Wav::from_bytes(b"\x00\x01\x02\x03 garbage").is_err());
+    #[cfg(any(feature = "ogg", feature = "mp3"))]
+    assert!(Stream::from_bytes(b"OggS but not really").is_err());
+}

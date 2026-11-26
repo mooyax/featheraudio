@@ -1,10 +1,11 @@
 //! Renders a short demo offline (no audio device needed) and writes it to `demo.wav`:
 //! background music on a music bus, "pew" sound effects panned around on an effects bus,
-//! a quieter stretch for the music, and a fade-out at the end.
+//! a quieter stretch for the music, a rapid-fire burst timed with `play_clocked`, and a
+//! fade-out at the end.
 //!
-//!     cargo run --release --example demo -- [song.xm]
+//!     cargo run --release --example demo -- [music.xm | music.ogg | music.mp3]
 //!
-//! Without a module file, the music is a generated drone.
+//! Without a music file, the music is a generated drone.
 
 use featheraudio::{Audio, PlayOptions, Source, Wav};
 
@@ -41,7 +42,7 @@ fn drone() -> Wav {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let music: Box<dyn Source> = match std::env::args().nth(1) {
-        Some(p) => tracker(&std::fs::read(p)?)?,
+        Some(p) => music(&std::fs::read(p)?)?,
         None => Box::new(drone()),
     };
     let (audio, mut mixer) = Audio::with_manual_output(RATE);
@@ -68,6 +69,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if step == 80 {
             audio.fade_bus_volume(music_bus, 1.0, 0.5);
         }
+        if step == 90 {
+            // a burst of 8 shots, 40 ms apart in "game time", all requested before the next
+            // 100 ms buffer: play_clocked spreads them out evenly inside it and the next one
+            let game_time = t as f64;
+            for k in 0..8 {
+                let shot = game_time + k as f64 * 0.04;
+                if k < 3 {
+                    audio.play_clocked_with(shot, &pew, PlayOptions::new().bus(sfx_bus).speed(1.6).volume(0.7));
+                } else {
+                    // the rest go into later buffers: schedule them with a delay instead
+                    audio.play_with(&pew, PlayOptions::new().bus(sfx_bus).speed(1.6).volume(0.7).delay((shot - game_time) as f32));
+                }
+            }
+        }
         if step == 100 {
             audio.fade_volume(bgm, 0.0, 2.0);
             audio.stop_after(bgm, 2.0);
@@ -80,14 +95,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(any(feature = "mod", feature = "it", feature = "xm"))]
-fn tracker(bytes: &[u8]) -> Result<Box<dyn Source>, Box<dyn std::error::Error>> {
-    Ok(Box::new(featheraudio::Tracker::from_bytes(bytes)?))
-}
-
-#[cfg(not(any(feature = "mod", feature = "it", feature = "xm")))]
-fn tracker(_: &[u8]) -> Result<Box<dyn Source>, Box<dyn std::error::Error>> {
-    Err("tracker modules need the `tracker` feature".into())
+/// music: a tracker module, or an OGG / MP3 file streamed while playing
+fn music(bytes: &[u8]) -> Result<Box<dyn Source>, Box<dyn std::error::Error>> {
+    #[cfg(any(feature = "ogg", feature = "mp3"))]
+    if let Ok(s) = featheraudio::Stream::from_bytes(bytes) {
+        return Ok(Box::new(s));
+    }
+    #[cfg(any(feature = "mod", feature = "it", feature = "xm"))]
+    return Ok(Box::new(featheraudio::Tracker::from_bytes(bytes)?));
+    #[allow(unreachable_code)]
+    Err("unsupported music file (or its feature is disabled)".into())
 }
 
 fn write_wav(path: &str, s: &[f32]) -> std::io::Result<()> {

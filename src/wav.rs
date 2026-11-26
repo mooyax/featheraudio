@@ -1,10 +1,12 @@
-//! In-memory samples, loaded from WAV files or created from raw samples.
+//! In-memory samples, loaded from WAV / OGG / MP3 files or created from raw samples.
 
 use crate::source::{Instance, Source};
 use crate::Error;
 use std::sync::Arc;
 
-/// A sound held in memory: loaded from a WAV file, or created from samples.
+/// A sound held in memory, decoded once: loaded from a WAV, OGG Vorbis (`ogg` feature) or MP3
+/// (`mp3` feature) file, or created from samples. Best for sound effects; for long music use
+/// [`Stream`](crate::Stream), which decodes while playing.
 ///
 /// Cloning is cheap (the samples are shared).
 #[derive(Clone)]
@@ -18,9 +20,17 @@ pub struct Wav {
 }
 
 impl Wav {
-    /// Loads a WAV file: 8 / 16 / 24 / 32-bit integer or 32 / 64-bit float PCM, any number of
-    /// channels (more than two are reduced to the first two).
+    /// Loads a sound file, telling the format from its contents:
+    /// - WAV: 8 / 16 / 24 / 32-bit integer or 32 / 64-bit float PCM
+    /// - OGG Vorbis, with the `ogg` feature
+    /// - MP3, with the `mp3` feature
+    ///
+    /// More than two channels are reduced to the front left and right.
     pub fn from_bytes(bytes: &[u8]) -> Result<Wav, Error> {
+        if crate::decode::detect(bytes) != crate::decode::Format::Wav {
+            let (samples, channels, rate) = crate::decode::decode_all(bytes)?;
+            return Ok(Wav::from_samples(samples, channels, rate));
+        }
         let (fmt, data) = parse_riff(bytes)?;
         let samples = decode(&fmt, data)?;
         let keep = fmt.channels.min(2) as usize;
@@ -232,7 +242,7 @@ pub(crate) mod tests {
         // 3 channels -> first two kept
         let w = Wav::from_bytes(&wav_bytes(1, 3, 8000, 8, &[192, 64, 128])).unwrap();
         assert_eq!((w.channels(), &w.data[..]), (2, &[0.5f32, -0.5][..]));
-        assert!(Wav::from_bytes(b"not a wav").is_err());
+        assert!(Wav::from_bytes(b"not a wav file").is_err());
         assert!(Wav::from_bytes(&wav_bytes(2, 1, 8000, 4, &[0])).is_err());
     }
 
