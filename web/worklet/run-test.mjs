@@ -6,7 +6,13 @@ const all = { chromium, firefox, webkit };
 const names = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(all);
 let failed = 0;
 for (const name of names) {
-  const browser = await all[name].launch(name === "chromium" ? { args: ["--autoplay-policy=no-user-gesture-required"] } : {});
+  // CI machines have no sound card: Firefox gets its test-only null audio output
+  const opts = {
+    chromium: { args: ["--autoplay-policy=no-user-gesture-required"] },
+    firefox: { firefoxUserPrefs: { "media.cubeb.force_null_context": true, "media.autoplay.default": 0, "media.autoplay.block-webaudio": false } },
+    webkit: {},
+  }[name];
+  const browser = await all[name].launch(opts);
   const page = await browser.newPage();
   const logs = [];
   page.on("console", (m) => logs.push(m.text()));

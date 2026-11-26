@@ -33,7 +33,9 @@ function tone(freq, secs, rate) {
 async function start() {
   $("start").disabled = true;
   ctx = new AudioContext();
-  await ctx.resume();
+  log(`AudioContext: ${ctx.state}, ${ctx.sampleRate} Hz`);
+  await Promise.race([ctx.resume(), sleep(3000)]);
+  log(`AudioContext: ${ctx.state}`);
   fa = await FeatherAudio.create(ctx);
   fa.node.connect(ctx.destination);
   log(`engine started in the AudioWorklet, ${fa.sampleRate()} Hz`);
