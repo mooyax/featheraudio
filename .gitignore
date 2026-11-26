@@ -7,3 +7,4 @@ target/
 /expo/ios/FeatherAudio.xcframework
 /expo/ios/FeatherAudioCore.xcframework
 /expo/node_modules
+!/expo/example/sounds/*.wav
