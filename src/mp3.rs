@@ -721,15 +721,14 @@ fn l3_huffman(
                 flush!(leaf >> 8);
                 for _ in 0..2 {
                     let mut lsb = leaf & 0x0F;
-                    let v;
-                    if linbits != 0 && lsb == 15 {
+                    let v = if linbits != 0 && lsb == 15 {
                         lsb += peek!(linbits) as i32;
                         flush!(linbits);
                         check!();
-                        v = one * l3_pow_43(lsb) * (if (cache as i32) < 0 { -1.0 } else { 1.0 });
+                        one * l3_pow_43(lsb) * (if (cache as i32) < 0 { -1.0 } else { 1.0 })
                     } else {
-                        v = G_POW43[(16 + lsb - 16 * (cache >> 31) as i32) as usize] * one;
-                    }
+                        G_POW43[(16 + lsb - 16 * (cache >> 31) as i32) as usize] * one
+                    };
                     if let Some(x) = dst.get_mut(d) {
                         *x = v;
                     }
