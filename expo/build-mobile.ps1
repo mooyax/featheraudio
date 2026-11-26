@@ -39,8 +39,9 @@ $extra = @()
 if ($Features -ne '') { $extra += @('--no-default-features', '--features', $Features) }
 
 foreach ($t in @($android.Keys + $ios.Keys)) {
-  Write-Host "== cargo build $t"
-  cargo build --release --manifest-path (Join-Path $crate 'Cargo.toml') --target $t @extra
+  Write-Host "== cargo $t"
+  # only the static library (capi also makes a shared one, which would need the NDK's linker)
+  cargo rustc --release --lib --crate-type staticlib --manifest-path (Join-Path $crate 'Cargo.toml') --target $t @extra
   if ($LASTEXITCODE -ne 0) { throw "cargo build failed for $t" }
 }
 

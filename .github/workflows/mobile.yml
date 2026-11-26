@@ -1,0 +1,115 @@
+# Builds the Expo test app (expo/example) with the featheraudio module for Android and iOS,
+# runs it on an emulator / simulator, and checks its self-test line in the log. The Android
+# APK is kept as an artifact: it installs on a real phone as it is.
+name: Mobile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "expo/**"
+      - "capi/**"
+      - "src/**"
+      - "Cargo.toml"
+      - ".github/workflows/mobile.yml"
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: capi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Static libraries
+        run: FA_TARGETS=android expo/build-mobile.sh
+      - name: Test app
+        working-directory: expo/example
+        run: |
+          ./setup.sh
+          npm install --no-audit --no-fund
+          npx tsc --noEmit -p .
+          npx expo prebuild -p android --no-install
+      - name: Release APK
+        working-directory: expo/example/android
+        run: ./gradlew assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: featheraudio-test-android
+          path: expo/example/android/app/build/outputs/apk/release/*.apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim
+          script: |
+            adb install -r expo/example/android/app/build/outputs/apk/release/app-release.apk
+            adb logcat -c
+            adb shell am start -n com.mooyax.featheraudio.example/.MainActivity
+            sleep 25
+            adb logcat -d > logcat.txt; grep -E "FEATHERAUDIO|featheraudio|AndroidRuntime|FATAL" logcat.txt | head -60
+            grep -q "FEATHERAUDIO_SELFTEST PASS" logcat.txt
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: capi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Static libraries
+        run: FA_TARGETS=ios expo/build-mobile.sh
+      - name: Test app
+        working-directory: expo/example
+        run: |
+          ./setup.sh
+          npm install --no-audit --no-fund
+          npx expo prebuild -p ios
+      - name: Build for the simulator
+        working-directory: expo/example/ios
+        run: |
+          ws=$(ls -d *.xcworkspace | head -1); scheme=${ws%.xcworkspace}
+          xcodebuild -workspace "$ws" -scheme "$scheme" -configuration Release -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build | tail -40
+          test "${PIPESTATUS[0]}" -eq 0
+      - name: Run on a simulator
+        working-directory: expo/example/ios
+        run: |
+          dev=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for k,v in d.items() if 'iOS' in k for x in v if 'iPhone' in x['name']))")
+          xcrun simctl boot "$dev"
+          app=$(ls -d build/Build/Products/Release-iphonesimulator/*.app | head -1)
+          xcrun simctl install "$dev" "$app"
+          xcrun simctl spawn "$dev" log stream --style compact --predicate 'eventMessage CONTAINS "FEATHERAUDIO" OR eventMessage CONTAINS "engine started" OR eventMessage CONTAINS "loaded"' > sim.log 2>&1 &
+          sleep 3
+          xcrun simctl launch "$dev" com.mooyax.featheraudio.example
+          sleep 25
+          cat sim.log | head -60
+          grep -q "FEATHERAUDIO_SELFTEST PASS" sim.log

@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "featheraudio test",
+    "slug": "feather-audio-example",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "android": { "package": "com.mooyax.featheraudio.example" },
+    "ios": { "bundleIdentifier": "com.mooyax.featheraudio.example" }
+  }
+}
