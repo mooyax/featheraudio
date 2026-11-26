@@ -92,6 +92,10 @@ double fa_time(const FaAudio *audio);
 FaSource *fa_source_load(const void *data, size_t len);
 /* OGG / MP3 decoded while playing (music). The data is copied. */
 FaSource *fa_source_stream(const void *data, size_t len);
+/* A buffer of `len` bytes in the library's memory, for hosts that cannot pass their own
+   (WebAssembly: JavaScript writes file data or samples there first). Free with fa_free. */
+void *fa_alloc(size_t len);
+void fa_free(void *ptr, size_t len);
 /* Your own samples: `frames * channels` floats, 1 or 2 channels, interleaved. Copied. */
 FaSource *fa_source_from_samples(const float *samples, uint32_t frames, uint32_t channels, uint32_t sample_rate);
 /* Length in seconds, or -1 if not known (streams, modules). */

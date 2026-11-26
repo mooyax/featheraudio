@@ -87,6 +87,7 @@ cargo run --release --example bench_fx             # エフェクトと 3D の C
 - **C API** — [`capi/`](capi)：静的ライブラリ・共有ライブラリと、ヘッダー [`capi/include/featheraudio.h`](capi/include/featheraudio.h)（説明はヘッダーの中）。`capi/` で `cargo build --release` すると `target/release/libfeatheraudio.a` ができます。関数名は `fa_` で始まり、ハンドルとバスは数値、エフェクトの対象はハンドルか `FA_BUS(n)` です。`cpal` 機能付きでビルドすると `fa_audio_create()`（既定のデバイス、PC 向け）が使え、付けなければ自分のオーディオコールバックから `fa_audio_render()` を呼びます。[`capi/tests/test.c`](capi/tests/test.c) が C のテストプログラムです。
 - **Expo（iOS / Android）** — [`expo/`](expo)：TypeScript の API（`init`、`load`、`stream`、`play`、`setReverb`、`setPosition` など）を持つ、ローカルの Expo ネイティブモジュールです。[expo/README.ja.md](expo/README.ja.md) を見てください。
 - **WebAssembly** — [`web/`](web)：ブラウザの中でエンジンを動かし、Web Audio のコールバックで音を混ぜます。デモでは、クリックした場所に 3D の音を置く、車がドップラー効果付きで通り過ぎる、リバーブ・エコーの切り替え、BGM をこもらせる、落とした OGG・MP3・WAV・トラッカー曲を鳴らす、ができます。`web/build.sh`（Windows では `web\build-web.ps1`）で `web/dist` に作り、`--single` を付けると 1 つの HTML ファイルにまとめた版もできます。
+- **Web のゲーム** — [`web/worklet/`](web/worklet)：エンジン（C API をそのまま `.wasm` にしたもの）をブラウザの音声スレッド（AudioWorklet）で動かし、ページからは `featheraudio.js` で呼びます。関数は Expo モジュールと同じ（`play`、`setPosition`、`setReverb` など）。`web/worklet/build.sh` で作れます。自己テストのページは[デモサイト](https://mooyax.github.io/featheraudio/worklet/test.html)にあり、CI では Chromium・Firefox・WebKit で動かしています。
 
 ## 機能（Cargo の features）
 

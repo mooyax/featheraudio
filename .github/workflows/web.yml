@@ -32,6 +32,10 @@ jobs:
         run: cargo install wasm-bindgen-cli --version 0.2.130 --locked
       - name: Build
         run: web/build.sh --single
+      - name: AudioWorklet version (published under /worklet/)
+        run: |
+          web/worklet/build.sh
+          cp -R web/worklet/dist web/dist/worklet
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web/dist

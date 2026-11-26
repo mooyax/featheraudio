@@ -189,6 +189,26 @@ pub unsafe extern "C" fn fa_source_from_samples(samples: *const f32, frames: u32
     new_source(Box::new(w), d)
 }
 
+/// A buffer of `len` bytes in the library's memory, for hosts that cannot pass their own
+/// memory (WebAssembly: JavaScript writes file data or samples here before fa_source_*).
+/// Free it with fa_free. Null if len is 0.
+#[no_mangle]
+pub extern "C" fn fa_alloc(len: usize) -> *mut u8 {
+    if len == 0 {
+        return std::ptr::null_mut();
+    }
+    let mut v = std::mem::ManuallyDrop::new(vec![0u8; len]);
+    v.as_mut_ptr()
+}
+
+/// Frees a buffer from fa_alloc (with the same len).
+#[no_mangle]
+pub unsafe extern "C" fn fa_free(ptr: *mut u8, len: usize) {
+    if !ptr.is_null() && len > 0 {
+        drop(Vec::from_raw_parts(ptr, len, len));
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn fa_source_duration(s: *const FaSource) -> f64 {
     s.as_ref().map_or(-1.0, |s| s.duration)
