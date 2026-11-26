@@ -2,6 +2,8 @@
 
 [English](README.md) | 日本語
 
+**[ブラウザで試す →](https://mooyax.github.io/featheraudio/)**（3D の音、エフェクト、手持ちの OGG・MP3・WAV・トラッカー曲。すべて WebAssembly 版のエンジンが鳴らします）
+
 Rust だけで書いた、ゲーム向けの羽のように軽いオーディオエンジンです。[SoLoud](https://solhsa.com/soloud/) にならい、「簡単なことは簡単に、難しいことも不可能にしない」作りを目指しています。
 
 - **鳴らしたら放っておける**：`audio.play(&sound)` だけ。鳴り終わった音は自動で片付きます。

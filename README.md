@@ -2,6 +2,8 @@
 
 English | [日本語](README.ja.md)
 
+**[Try it in your browser →](https://mooyax.github.io/featheraudio/)** (3D sound, effects, and your own OGG / MP3 / WAV / tracker files, all mixed by the engine as WebAssembly)
+
 A feather-light audio engine for games, in pure Rust. Inspired by [SoLoud](https://solhsa.com/soloud/): simple things are simple, and the harder things are possible.
 
 - **Fire and forget**: `audio.play(&sound)` — the voice cleans itself up when it ends.
