@@ -119,6 +119,9 @@ int32_t fa_is_playing(const FaAudio *audio, uint32_t handle);
 uint32_t fa_active_voices(const FaAudio *audio);
 /* default 32, at most 256; when full, the oldest unprotected sound makes room */
 void fa_set_max_voices(const FaAudio *audio, uint32_t n);
+/* the master limiter, on by default: many sounds together over full scale are turned down
+   smoothly instead of crackling (the output is 1.5 ms later). 0: off, no delay, clipped */
+void fa_set_limiter(const FaAudio *audio, int32_t on);
 void fa_stop_all(const FaAudio *audio);
 void fa_set_master_volume(const FaAudio *audio, float volume);
 
