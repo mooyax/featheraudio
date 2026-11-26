@@ -16,7 +16,8 @@ default = ["tracker", "ogg", "mp3", "effects"]
 # fa_audio_create(): output to the default device through cpal (desktop). Mobile apps
 # leave it out and call fa_audio_render from their own audio callback.
 cpal = ["featheraudio/cpal"]
-tracker = ["featheraudio/tracker"]
+# (capi's own mod / it / xm turn on loading modules in fa_source_load)
+tracker = ["mod", "it", "xm"]
 mod = ["featheraudio/mod"]
 it = ["featheraudio/it"]
 xm = ["featheraudio/xm"]

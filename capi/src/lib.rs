@@ -339,6 +339,13 @@ pub unsafe extern "C" fn fa_set_max_voices(a: *const FaAudio, n: u32) {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn fa_set_limiter(a: *const FaAudio, on: i32) {
+    if let Some(a) = audio(a) {
+        a.audio.set_limiter(on != 0);
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn fa_stop_all(a: *const FaAudio) {
     if let Some(a) = audio(a) {
         a.audio.stop_all();

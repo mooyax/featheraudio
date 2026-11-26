@@ -40,6 +40,8 @@ int main(int argc, char **argv) {
     const char *data_dir = argc > 1 ? argv[1] : "../tests/data";
     FaAudio *a = fa_audio_create_manual(RATE);
     CHECK(a && fa_audio_sample_rate(a) == RATE);
+    /* exact samples below: without the limiter's 1.5 ms look-ahead */
+    fa_set_limiter(a, 0);
 
     /* a constant 0.5 for 0.1 s */
     float dc[4800];
@@ -143,6 +145,26 @@ int main(int argc, char **argv) {
         CHECK(rms(4800) > 0.05f);
         fa_source_destroy(w);
         fa_source_destroy(st); /* still playing: fine */
+        render(a, 0.1f);
+    }
+
+    /* a tracker module (tests/data/song.mod, a 4-channel ProTracker module) */
+    {
+        char path[512];
+        snprintf(path, sizeof path, "%s/song.mod", data_dir);
+        size_t len;
+        void *bytes = read_file(path, &len);
+        CHECK(bytes);
+        FaSource *t = fa_source_load(bytes, len);
+        free(bytes);
+        CHECK(t && fa_source_duration(t) < 0);
+        fa_stop_all(a);
+        render(a, 0.05f);
+        uint32_t h = fa_play(a, t, NULL);
+        render(a, 0.5f);
+        CHECK(fa_is_playing(a, h) && rms(RATE / 2) > 0.05f);
+        fa_stop_all(a);
+        fa_source_destroy(t);
         render(a, 0.1f);
     }
 
