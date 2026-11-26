@@ -20,7 +20,7 @@ powershell -ExecutionPolicy Bypass -File expo\build-mobile.ps1
 
 サイズを減らしたいときは機能を選べます（本体の README を参照）：`-Features "xm,ogg,effects"`
 
-できるもの：`android/libs/<ABI>/libfeatheraudio.a` と `ios/FeatherAudio.xcframework`
+できるもの：`android/libs/<ABI>/libfeatheraudio.a` と `ios/FeatherAudioCore.xcframework`
 
 ## 2. アプリに組み込む
 

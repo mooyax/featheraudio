@@ -55,7 +55,7 @@ export default function App() {
           if (!(FA.duration(id) > 0.2)) return fail(`${k} too short (${FA.duration(id)} s)`);
         }
         const t0 = FA.time();
-        const h = FA.play(sources.current.ogg!, { volume: 0.5 });
+        const h = FA.play(sources.current.ogg!, { volume: 0.5, loop: true });
         const s = FA.play(FA.stream(uris.current.mp3!), { volume: 0.5 });
         await sleep(300);
         const voices = FA.activeVoices();

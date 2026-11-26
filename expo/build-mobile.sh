@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds the featheraudio C API (capi/) as static libraries for iOS and Android and puts them
 # into this Expo module (macOS / Linux version of build-mobile.ps1):
-#   ios/FeatherAudio.xcframework                  (iOS device arm64 + simulator arm64)
+#   ios/FeatherAudioCore.xcframework              (iOS device arm64 + simulator arm64)
 #   android/libs/<ABI>/libfeatheraudio.a          (arm64-v8a, armeabi-v7a, x86_64, x86)
 # and copies the header (capi/include/featheraudio.h) next to the native code.
 #
@@ -40,11 +40,14 @@ for p in $android; do
   cp "$crate/target/${p%%:*}/release/libfeatheraudio.a" "$here/android/libs/${p#*:}/libfeatheraudio.a"
 done
 if [ -n "$ios" ]; then
-  xcf="$here/ios/FeatherAudio.xcframework"
+  # not "libfeatheraudio.a": macOS file names ignore case, and the pod's own Swift library is
+  # libFeatherAudio.a, so the linker would never see the engine
+  xcf="$here/ios/FeatherAudioCore.xcframework"
+  rm -rf "$here/ios/FeatherAudio.xcframework"
   rm -rf "$xcf"
   for p in $ios; do
     mkdir -p "$xcf/${p#*:}"
-    cp "$crate/target/${p%%:*}/release/libfeatheraudio.a" "$xcf/${p#*:}/libfeatheraudio.a"
+    cp "$crate/target/${p%%:*}/release/libfeatheraudio.a" "$xcf/${p#*:}/libfeatheraudio_core.a"
   done
   cat > "$xcf/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -55,11 +58,11 @@ if [ -n "$ios" ]; then
 	<array>
 		<dict>
 			<key>BinaryPath</key>
-			<string>libfeatheraudio.a</string>
+			<string>libfeatheraudio_core.a</string>
 			<key>LibraryIdentifier</key>
 			<string>ios-arm64</string>
 			<key>LibraryPath</key>
-			<string>libfeatheraudio.a</string>
+			<string>libfeatheraudio_core.a</string>
 			<key>SupportedArchitectures</key>
 			<array>
 				<string>arm64</string>
@@ -69,11 +72,11 @@ if [ -n "$ios" ]; then
 		</dict>
 		<dict>
 			<key>BinaryPath</key>
-			<string>libfeatheraudio.a</string>
+			<string>libfeatheraudio_core.a</string>
 			<key>LibraryIdentifier</key>
 			<string>ios-arm64-simulator</string>
 			<key>LibraryPath</key>
-			<string>libfeatheraudio.a</string>
+			<string>libfeatheraudio_core.a</string>
 			<key>SupportedArchitectures</key>
 			<array>
 				<string>arm64</string>

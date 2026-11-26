@@ -1,5 +1,5 @@
 # featheraudio for Expo (iOS). The engine is the Rust static library in
-# ios/FeatherAudio.xcframework (built by expo/build-mobile.ps1); Swift calls its C API
+# ios/FeatherAudioCore.xcframework (built by expo/build-mobile.ps1); Swift calls its C API
 # (ios/featheraudio.h) and feeds AVAudioEngine.
 Pod::Spec.new do |s|
   s.name           = 'FeatherAudio'
@@ -17,7 +17,8 @@ Pod::Spec.new do |s|
 
   s.source_files = 'ios/**/*.{h,swift}'
   s.public_header_files = 'ios/featheraudio.h'
-  s.vendored_frameworks = 'ios/FeatherAudio.xcframework'
+  s.preserve_paths = 'ios/FeatherAudioCore.xcframework'
+  s.vendored_frameworks = 'ios/FeatherAudioCore.xcframework'
   s.frameworks = 'AVFoundation'
 
   s.pod_target_xcconfig = {

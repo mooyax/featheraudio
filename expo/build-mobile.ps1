@@ -1,6 +1,6 @@
 # Builds the featheraudio C API (capi/) as static libraries for iOS and Android and puts them
 # into this Expo module:
-#   ios\FeatherAudio.xcframework                  (iOS device arm64 + simulator arm64)
+#   ios\FeatherAudioCore.xcframework              (iOS device arm64 + simulator arm64)
 #   android\libs\<ABI>\libfeatheraudio.a          (arm64-v8a, armeabi-v7a, x86_64, x86)
 # and copies the header (capi\include\featheraudio.h) next to the native code.
 #
@@ -58,12 +58,16 @@ foreach ($t in $android.Keys) {
 }
 
 # ---- iOS: an XCFramework of two static libraries (written by hand, no xcodebuild needed) ----
-$xcf = Join-Path $here 'ios\FeatherAudio.xcframework'
+# not "libfeatheraudio.a": macOS file names ignore case, and the pod's own Swift library is
+# libFeatherAudio.a, so the linker would never see the engine
+$old = Join-Path $here 'ios\FeatherAudio.xcframework'
+if (Test-Path $old) { Remove-Item -Recurse -Force $old }
+$xcf = Join-Path $here 'ios\FeatherAudioCore.xcframework'
 if (Test-Path $xcf) { Remove-Item -Recurse -Force $xcf }
 foreach ($t in $ios.Keys) {
   $dst = Join-Path $xcf $ios[$t]
   New-Item -ItemType Directory -Force -Path $dst | Out-Null
-  Copy-Item (Join-Path $targetDir "$t\release\libfeatheraudio.a") (Join-Path $dst 'libfeatheraudio.a') -Force
+  Copy-Item (Join-Path $targetDir "$t\release\libfeatheraudio.a") (Join-Path $dst 'libfeatheraudio_core.a') -Force
 }
 $plist = @'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -74,11 +78,11 @@ $plist = @'
 	<array>
 		<dict>
 			<key>BinaryPath</key>
-			<string>libfeatheraudio.a</string>
+			<string>libfeatheraudio_core.a</string>
 			<key>LibraryIdentifier</key>
 			<string>ios-arm64</string>
 			<key>LibraryPath</key>
-			<string>libfeatheraudio.a</string>
+			<string>libfeatheraudio_core.a</string>
 			<key>SupportedArchitectures</key>
 			<array>
 				<string>arm64</string>
@@ -88,11 +92,11 @@ $plist = @'
 		</dict>
 		<dict>
 			<key>BinaryPath</key>
-			<string>libfeatheraudio.a</string>
+			<string>libfeatheraudio_core.a</string>
 			<key>LibraryIdentifier</key>
 			<string>ios-arm64-simulator</string>
 			<key>LibraryPath</key>
-			<string>libfeatheraudio.a</string>
+			<string>libfeatheraudio_core.a</string>
 			<key>SupportedArchitectures</key>
 			<array>
 				<string>arm64</string>

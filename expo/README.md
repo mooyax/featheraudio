@@ -20,7 +20,7 @@ powershell -ExecutionPolicy Bypass -File expo\build-mobile.ps1
 
 To ship less, choose features (see the main README): `-Features "xm,ogg,effects"`.
 
-Output: `android/libs/<ABI>/libfeatheraudio.a` and `ios/FeatherAudio.xcframework`.
+Output: `android/libs/<ABI>/libfeatheraudio.a` and `ios/FeatherAudioCore.xcframework`.
 
 ## 2. Add it to the app
 
