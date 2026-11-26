@@ -18,6 +18,8 @@ rustup と cargo だけで作れます（静的ライブラリなので Xcode �
 powershell -ExecutionPolicy Bypass -File expo\build-mobile.ps1
 ```
 
+macOS・Linux では `expo/build-mobile.sh`（機能は `expo/build-mobile.sh xm,ogg,effects` のように指定）。
+
 サイズを減らしたいときは機能を選べます（本体の README を参照）：`-Features "xm,ogg,effects"`
 
 できるもの：`android/libs/<ABI>/libfeatheraudio.a` と `ios/FeatherAudioCore.xcframework`
@@ -25,7 +27,8 @@ powershell -ExecutionPolicy Bypass -File expo\build-mobile.ps1
 ## 2. アプリに組み込む
 
 1. このフォルダをアプリの `modules/` の下にコピーします（例：`modules/feather-audio`）。Expo が `expo-module.config.json` を見つけて組み込みます。
-2. トラッカーの曲をアセットとして読むなら、Metro（`metro.config.js`）に拡張子を足します：`config.resolver.assetExts.push("mod", "it", "s3m", "xm");`
+2. トラッカーの曲や OGG をアセットとして読むなら、Metro（`metro.config.js`）に拡張子を足します：`config.resolver.assetExts.push("ogg", "mod", "it", "s3m", "xm");`
+   - Android はアセットを拡張子なしの名前で持つので、**拡張子だけ違う同名のファイル**（`hit.ogg` と `hit.wav` など）は並べられません（ビルドが Duplicate resources で止まります）
 3. いつもどおりビルドします（`npx expo run:ios`、`npx expo run:android`、`eas build`）。
 
 ## 3. 使い方
@@ -62,6 +65,20 @@ FA.setPosition(drone, [x, 0, z]);                   // 毎フレーム
 ```
 
 長い OGG・MP3 の曲は `FA.stream(uri)` で、鳴らしながら展開できます（メモリをほとんど使いません）。
+
+## 試し用アプリと自動テスト
+
+`example/` は、このモジュールをゲームと同じように `modules/feather-audio` に入れた Expo SDK 57 のアプリです。起動すると、エンジンの起動、OGG・MP3・MP2 の読み込みと再生、エンジンの時計が進むこと（＝音声出力が動いていること）を自分で確かめ、結果を画面とログに出します（`FEATHERAUDIO_SELFTEST PASS / FAIL`）。ボタンで音・ループ・リバーブ・こもらせる、を試せます。
+
+```sh
+expo/build-mobile.sh          # Windows は expo\build-mobile.ps1
+cd expo/example
+./setup.sh                    # Windows は .\setup.ps1
+npm install
+npx expo run:android          # または npx expo run:ios
+```
+
+GitHub Actions（`.github/workflows/mobile.yml`）が、push のたびにこのアプリを Android（Release APK、エミュレーターで実行）と iOS（シミュレーター向け、実行）でビルドして自己テストを確かめます。APK は実行結果のページから `featheraudio-test-android` としてダウンロードでき、そのまま Android の実機に入れられます。
 
 ## 補足
 

@@ -120,5 +120,5 @@ jobs:
           sleep 3
           xcrun simctl launch "$dev" com.mooyax.featheraudio.example
           for i in $(seq 1 30); do grep -q "FEATHERAUDIO_SELFTEST" sim.log && break; sleep 2; done
-          grep -iE "FEATHERAUDIO|featheraudio|exception|crash" sim.log | head -40 || true
+          grep -E "FEATHERAUDIO_SELFTEST" sim.log || grep -iE "exception|crash|fault" sim.log | head -40 || true
           grep -q "FEATHERAUDIO_SELFTEST PASS" sim.log

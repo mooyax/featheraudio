@@ -18,6 +18,8 @@ Only rustup and cargo are needed (no Xcode, no Android NDK: these are static lib
 powershell -ExecutionPolicy Bypass -File expo\build-mobile.ps1
 ```
 
+On macOS / Linux: `expo/build-mobile.sh` (features as in `expo/build-mobile.sh xm,ogg,effects`).
+
 To ship less, choose features (see the main README): `-Features "xm,ogg,effects"`.
 
 Output: `android/libs/<ABI>/libfeatheraudio.a` and `ios/FeatherAudioCore.xcframework`.
@@ -62,6 +64,22 @@ FA.setPosition(drone, [x, 0, z]);                   // every frame
 ```
 
 Long music in OGG / MP3: `FA.stream(uri)` decodes while playing and uses little memory.
+
+## Test app and automatic tests
+
+`example/` is an Expo SDK 57 app with this module in `modules/feather-audio`, as in a game. On start it checks the engine by itself (start, OGG / MP3 / MP2 load and play, the engine clock moving, which means the audio output runs) and shows and logs the result (`FEATHERAUDIO_SELFTEST PASS / FAIL`); buttons play sounds, a loop, reverb and a low-pass.
+
+```sh
+expo/build-mobile.sh          # Windows: expo\build-mobile.ps1
+cd expo/example
+./setup.sh                    # Windows: .\setup.ps1
+npm install
+npx expo run:android          # or npx expo run:ios
+```
+
+GitHub Actions (`.github/workflows/mobile.yml`) builds this app on every push for Android (release APK, run on an emulator) and iOS (simulator build, run) and checks the self-test. The APK can be downloaded from the run's page as `featheraudio-test-android` and installs on a real Android phone as it is.
+
+Android keeps assets as resources named without their extension: two assets that differ only in the extension (`hit.ogg` and `hit.wav`) stop the build with "Duplicate resources".
 
 ## Notes
 
