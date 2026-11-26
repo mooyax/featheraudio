@@ -33,6 +33,7 @@ pub(crate) enum Command {
     Listener(ListenerCmd),
     MasterVolume(f32),
     MaxVoices(usize),
+    Limiter(bool),
     StopAll,
 }
 
@@ -329,6 +330,8 @@ pub struct Mixer {
     dry: Vec<f32>,
     bus_buf: Vec<f32>,
     listener: Listener,
+    limiter: crate::limiter::Limiter,
+    limiter_on: bool,
     clock: Arc<Clock>,
 }
 
@@ -367,6 +370,8 @@ impl Mixer {
             tmp: vec![0.0; BLOCK * 2],
             dry: vec![0.0; BLOCK * 2],
             listener: Listener::default(),
+            limiter: crate::limiter::Limiter::new(rate),
+            limiter_on: true,
             bus_buf: vec![0.0; MAX_BUSES * BLOCK * 2],
             clock,
         }
@@ -560,6 +565,12 @@ impl Mixer {
             },
             Command::MasterVolume(x) => self.master.set(x),
             Command::MaxVoices(n) => self.max_voices = n.clamp(1, VOICE_CAPACITY),
+            Command::Limiter(on) => {
+                if on != self.limiter_on {
+                    self.limiter.reset();
+                    self.limiter_on = on;
+                }
+            }
             Command::StopAll => {
                 for v in self.voices.iter_mut() {
                     v.stop_in = Some(declick);
@@ -732,9 +743,17 @@ impl Mixer {
         let mut g = self.master_gain;
         for o in out.chunks_exact_mut(2) {
             g += d;
-            o[0] = (o[0] * g).clamp(-1.0, 1.0);
-            o[1] = (o[1] * g).clamp(-1.0, 1.0);
+            o[0] *= g;
+            o[1] *= g;
         }
         self.master_gain = target;
+        if self.limiter_on {
+            // many sounds at once: turned down smoothly instead of cut off at full scale
+            self.limiter.process(out);
+        } else {
+            for o in out.iter_mut() {
+                *o = o.clamp(-1.0, 1.0);
+            }
+        }
     }
 }

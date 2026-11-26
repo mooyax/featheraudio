@@ -345,6 +345,15 @@ impl Audio {
         self.send(Command::MaxVoices(n));
     }
 
+    /// The master limiter (on by default): when many sounds together go over full scale, the
+    /// whole mix is turned down smoothly for a moment instead of the tops of the waves being
+    /// cut off, which sounds like crackling. It looks 1.5 ms ahead, so the output is that much
+    /// later; under full scale the sound passes unchanged. Off: no delay, and anything over
+    /// full scale is cut off.
+    pub fn set_limiter(&self, on: bool) {
+        self.send(Command::Limiter(on));
+    }
+
     /// Creates a new bus, or returns `None` when all 15 extra buses are in use.
     pub fn create_bus(&self) -> Option<Bus> {
         let mut f = self.front();

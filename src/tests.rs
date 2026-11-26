@@ -4,6 +4,14 @@ use crate::*;
 
 const RATE: u32 = 48000;
 
+/// The engine without the master limiter (its 1.5 ms look-ahead delays the output), for the
+/// tests that check exact samples.
+fn manual(rate: u32) -> (Audio, crate::Mixer) {
+    let (a, m) = Audio::with_manual_output(rate);
+    a.set_limiter(false);
+    (a, m)
+}
+
 /// a constant signal: easy to check levels with
 fn dc(level: f32, seconds: f32) -> Wav {
     Wav::from_samples(vec![level; (seconds * RATE as f32) as usize], 1, RATE)
@@ -21,7 +29,7 @@ fn last(out: &[f32]) -> (f32, f32) {
 
 #[test]
 fn plays_and_ends() {
-    let (a, mut m) = Audio::with_manual_output(RATE);
+    let (a, mut m) = manual(RATE);
     let h = a.play(&dc(0.5, 0.1));
     assert!(a.is_playing(h));
     let out = render(&mut m, 0.05);
@@ -35,7 +43,7 @@ fn plays_and_ends() {
 
 #[test]
 fn volume_pan_and_buses() {
-    let (a, mut m) = Audio::with_manual_output(RATE);
+    let (a, mut m) = manual(RATE);
     let bus = a.create_bus().unwrap();
     let h = a.play_with(
         &dc(0.5, 1.0),
@@ -63,7 +71,7 @@ fn volume_pan_and_buses() {
 
 #[test]
 fn fades_and_scheduled_stop() {
-    let (a, mut m) = Audio::with_manual_output(RATE);
+    let (a, mut m) = manual(RATE);
     let h = a.play_with(&dc(1.0, 1.0), PlayOptions::new().looping(true));
     a.fade_volume(h, 0.0, 0.5);
     a.stop_after(h, 0.5);
@@ -85,7 +93,7 @@ fn fades_and_scheduled_stop() {
 
 #[test]
 fn stop_and_pause_do_not_click() {
-    let (a, mut m) = Audio::with_manual_output(RATE);
+    let (a, mut m) = manual(RATE);
     let h = a.play_with(&dc(1.0, 1.0), PlayOptions::new().looping(true));
     render(&mut m, 0.01);
     a.set_paused(h, true);
@@ -124,7 +132,7 @@ fn stop_and_pause_do_not_click() {
 
 #[test]
 fn voice_limit_replaces_the_oldest_unprotected() {
-    let (a, mut m) = Audio::with_manual_output(RATE);
+    let (a, mut m) = manual(RATE);
     a.set_max_voices(2);
     let s = dc(0.1, 1.0);
     let music = a.play_with(&s, PlayOptions::new().protected(true));
@@ -150,7 +158,7 @@ fn voice_limit_replaces_the_oldest_unprotected() {
 
 #[test]
 fn many_sounds_mix_and_clip() {
-    let (a, mut m) = Audio::with_manual_output(RATE);
+    let (a, mut m) = manual(RATE);
     let s = dc(0.3, 0.1);
     for _ in 0..5 {
         a.play(&s);
@@ -171,7 +179,7 @@ fn many_sounds_mix_and_clip() {
 #[cfg(feature = "mod")]
 #[test]
 fn tracker_music_on_a_bus() {
-    let (a, mut m) = Audio::with_manual_output(RATE);
+    let (a, mut m) = manual(RATE);
     let song = Tracker::from_bytes(&crate::tracker::tests::tiny_mod()).unwrap();
     let music = a.create_bus().unwrap();
     let h = a.play_with(&song, PlayOptions::new().bus(music).protected(true));
@@ -191,7 +199,7 @@ fn tracker_music_on_a_bus() {
 
 #[test]
 fn delay_and_engine_time() {
-    let (a, mut m) = Audio::with_manual_output(RATE);
+    let (a, mut m) = manual(RATE);
     assert_eq!(a.time(), 0.0);
     a.play_with(&dc(0.5, 1.0), PlayOptions::new().delay(0.01));
     let out = render(&mut m, 0.02);
@@ -202,7 +210,7 @@ fn delay_and_engine_time() {
 
 #[test]
 fn play_clocked_spreads_sounds_within_a_buffer() {
-    let (a, mut m) = Audio::with_manual_output(RATE);
+    let (a, mut m) = manual(RATE);
     let s = dc(0.1, 1.0);
     // three shots 5 ms apart in game time, all requested before the next buffer
     a.play_clocked(10.000, &s);
@@ -229,7 +237,7 @@ fn sine_check(w: &Wav, rate: u32) {
         w.duration()
     );
     // 440 Hz: about 2 * 440 * 0.25 = 220 zero crossings
-    let (a, mut m) = Audio::with_manual_output(rate);
+    let (a, mut m) = manual(rate);
     a.play(w);
     let mut out = vec![0.0; (rate as usize / 5) * 2];
     m.render(&mut out);
@@ -346,7 +354,7 @@ mod fx {
 
     /// level (dB) of a looping sine through an effect on its voice, relative to the input
     fn through(freq: f32, f: Filter) -> f32 {
-        let (a, mut m) = Audio::with_manual_output(RATE);
+        let (a, mut m) = manual(RATE);
         // quiet enough that resonance peaks do not clip
         let h = a.play_with(
             &sine(freq, 1.0),
@@ -391,8 +399,8 @@ mod fx {
 
     #[test]
     fn wet_zero_is_untouched_and_fades_are_smooth() {
-        let (a, mut m) = Audio::with_manual_output(RATE);
-        let (b, mut m2) = Audio::with_manual_output(RATE);
+        let (a, mut m) = manual(RATE);
+        let (b, mut m2) = manual(RATE);
         let s = sine(5000.0, 1.0);
         let h = a.play_with(&s, PlayOptions::new().looping(true));
         b.play_with(&s, PlayOptions::new().looping(true));
@@ -422,7 +430,7 @@ mod fx {
 
     #[test]
     fn echo_repeats_and_keeps_ringing_after_the_sound() {
-        let (a, mut m) = Audio::with_manual_output(RATE);
+        let (a, mut m) = manual(RATE);
         a.set_effect(Bus::MAIN, 0, Echo::new(0.1, 0.5));
         let h = a.play(&click());
         let out = render(&mut m, 0.35);
@@ -438,7 +446,7 @@ mod fx {
             "only the repeats, in both channels"
         );
         // damping makes each repeat duller (spread out, lower peak)
-        let (a, mut m) = Audio::with_manual_output(RATE);
+        let (a, mut m) = manual(RATE);
         a.set_effect(Bus::MAIN, 0, Echo::new(0.1, 0.5).damping(0.5));
         a.play(&click());
         let out = render(&mut m, 0.15);
@@ -448,7 +456,7 @@ mod fx {
 
     #[test]
     fn reverb_rings_then_goes_quiet() {
-        let (a, mut m) = Audio::with_manual_output(RATE);
+        let (a, mut m) = manual(RATE);
         a.set_effect(Bus::MAIN, 0, Reverb::new().room_size(0.5));
         a.play(&click());
         let early = render(&mut m, 0.3);
@@ -463,7 +471,7 @@ mod fx {
             "the bus stops running it after the tail"
         );
         // dry 0: only the reverb, no direct sound
-        let (a, mut m) = Audio::with_manual_output(RATE);
+        let (a, mut m) = manual(RATE);
         a.set_effect(Bus::MAIN, 0, Reverb::new().dry(0.0));
         a.play(&click());
         assert_eq!(render(&mut m, 0.01)[0], 0.0);
@@ -471,7 +479,7 @@ mod fx {
 
     #[test]
     fn buses_flow_into_main() {
-        let (a, mut m) = Audio::with_manual_output(RATE);
+        let (a, mut m) = manual(RATE);
         let music = a.create_bus().unwrap();
         a.set_effect(Bus::MAIN, 0, Filter::low_pass(200.0));
         a.play_with(
@@ -505,7 +513,7 @@ mod spatial3d {
 
     #[test]
     fn distance_and_direction() {
-        let (a, mut m) = Audio::with_manual_output(RATE);
+        let (a, mut m) = manual(RATE);
         let h = a.play_with(
             &dc(0.5, 1.0),
             PlayOptions::new()
@@ -553,7 +561,7 @@ mod spatial3d {
     #[test]
     fn doppler_raises_the_pitch_of_an_approaching_sound() {
         let crossings = |v: f32| {
-            let (a, mut m) = Audio::with_manual_output(RATE);
+            let (a, mut m) = manual(RATE);
             a.play_with(
                 &sine(1000.0, 1.0),
                 PlayOptions::new()
@@ -711,5 +719,55 @@ mod mp3_port {
                 let _ = crate::mp3_decode_raw(&d, 2);
             }
         }
+    }
+}
+
+mod limiter {
+    use super::*;
+
+    fn tone(amp: f32, freq: f32, secs: f32) -> Wav {
+        let n = (secs * RATE as f32) as usize;
+        Wav::from_samples(
+            (0..n)
+                .map(|i| amp * (std::f32::consts::TAU * freq * i as f32 / RATE as f32).sin())
+                .collect(),
+            1,
+            RATE,
+        )
+    }
+
+    #[test]
+    fn many_loud_sounds_stay_under_full_scale() {
+        // twelve taps on a loud sound, 70 ms apart: up to about 5x full scale together
+        let (a, mut m) = Audio::with_manual_output(RATE);
+        let s = tone(0.6, 440.0, 0.5);
+        for k in 0..12 {
+            a.play_with(&s, PlayOptions::new().delay(k as f32 * 0.07));
+        }
+        let out = render(&mut m, 1.5);
+        let peak = out.iter().fold(0f32, |p, x| p.max(x.abs()));
+        assert!(peak <= 0.9771, "peak {peak}");
+        assert!(peak > 0.9, "turned down only as much as needed: peak {peak}");
+        // and back to full level once the sounds are gone
+        let h = a.play(&tone(0.5, 440.0, 1.0));
+        let out = render(&mut m, 0.9);
+        let late = out[out.len() - 9600..].iter().fold(0f32, |p, x| p.max(x.abs()));
+        assert!((late - 0.5).abs() < 0.005, "released: {late}");
+        a.stop(h);
+    }
+
+    #[test]
+    fn quiet_sounds_pass_unchanged() {
+        let s = tone(0.4, 300.0, 0.2);
+        let (a, mut m) = Audio::with_manual_output(RATE);
+        a.play(&s);
+        let with = render(&mut m, 0.3);
+        let (b, mut m2) = manual(RATE);
+        b.play(&s);
+        let without = render(&mut m2, 0.3);
+        // 1.5 ms later (72 frames at 48 kHz), and otherwise the same samples
+        let d = 72 * 2;
+        assert!(with[..d].iter().all(|&x| x == 0.0));
+        assert_eq!(&with[d..], &without[..without.len() - d]);
     }
 }

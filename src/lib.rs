@@ -34,6 +34,7 @@ mod audio;
 #[cfg_attr(not(any(feature = "ogg", feature = "mp3")), allow(dead_code))]
 mod decode;
 pub mod effects;
+mod limiter;
 mod mixer;
 #[cfg(feature = "mp3")]
 mod mp3;
