@@ -7,5 +7,6 @@ rm -rf "$here/modules/feather-audio"
 mkdir -p "$here/modules/feather-audio" "$here/assets"
 cd "$here/.."
 cp -R package.json expo-module.config.json FeatherAudio.podspec src ios android "$here/modules/feather-audio/"
-cp ../tests/data/stereo.ogg ../tests/data/stereo.mp3 ../tests/data/stereo.mp2 "$here/assets/"
+# Android keeps assets as resources named without the extension: the names must differ
+for ext in ogg mp3 mp2; do cp "../tests/data/stereo.$ext" "$here/assets/test_$ext.$ext"; done
 echo "module and test sounds in place"

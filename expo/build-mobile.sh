@@ -93,4 +93,4 @@ if [ -n "$ios" ]; then
 PLIST
 fi
 echo "== done"
-find "$here/android/libs" "$here/ios" -name '*.a' -exec ls -l {} \; 2>/dev/null
+find "$here/android/libs" "$here/ios" -name '*.a' -exec ls -l {} \; 2>/dev/null || true

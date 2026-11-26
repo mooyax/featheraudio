@@ -8,9 +8,9 @@ import { Asset } from "expo-asset";
 import * as FA from "./modules/feather-audio/src";
 
 const files = {
-  ogg: require("./assets/stereo.ogg"),
-  mp3: require("./assets/stereo.mp3"),
-  mp2: require("./assets/stereo.mp2"),
+  ogg: require("./assets/test_ogg.ogg"),
+  mp3: require("./assets/test_mp3.mp3"),
+  mp2: require("./assets/test_mp2.mp2"),
 };
 type Kind = keyof typeof files;
 
