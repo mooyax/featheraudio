@@ -84,6 +84,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
       - name: Static libraries
         run: FA_TARGETS=ios expo/build-mobile.sh
       - name: Test app
@@ -96,10 +101,14 @@ jobs:
         working-directory: expo/example/ios
         run: |
           ws=$(ls -d *.xcworkspace | head -1); scheme=${ws%.xcworkspace}
+          set +e
           xcodebuild -workspace "$ws" -scheme "$scheme" -configuration Release -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO build | tail -40
-          test "${PIPESTATUS[0]}" -eq 0
+            CODE_SIGNING_ALLOWED=NO build > xcodebuild.log 2>&1
+          r=$?
+          grep -nE "error|Error|failed|FAILED" xcodebuild.log | grep -v "^.*note:" | head -80
+          tail -25 xcodebuild.log
+          exit $r
       - name: Run on a simulator
         working-directory: expo/example/ios
         run: |

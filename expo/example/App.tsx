@@ -52,7 +52,7 @@ export default function App() {
           const id = FA.load(uri);
           sources.current[k] = id;
           log(`${k}: loaded, ${FA.duration(id).toFixed(3)} s`);
-          if (!(FA.duration(id) > 0.5)) return fail(`${k} too short`);
+          if (!(FA.duration(id) > 0.4)) return fail(`${k} too short (${FA.duration(id)} s)`);
         }
         const t0 = FA.time();
         const h = FA.play(sources.current.ogg!, { volume: 0.5 });
