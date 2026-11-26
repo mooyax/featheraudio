@@ -114,11 +114,13 @@ jobs:
         run: |
           dev=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for k,v in d.items() if 'iOS' in k for x in v if 'iPhone' in x['name']))")
           xcrun simctl boot "$dev"
+          xcrun simctl bootstatus "$dev" -b
           app=$(ls -d build/Build/Products/Release-iphonesimulator/*.app | head -1)
           xcrun simctl install "$dev" "$app"
+          sleep 5
           xcrun simctl spawn "$dev" log stream --style compact --predicate 'process == "featheraudiotest"' > sim.log 2>&1 &
           sleep 3
-          xcrun simctl launch "$dev" com.mooyax.featheraudio.example
+          for i in 1 2 3; do xcrun simctl launch "$dev" com.mooyax.featheraudio.example && break; sleep 10; done
           for i in $(seq 1 30); do grep -q "FEATHERAUDIO_SELFTEST" sim.log && break; sleep 2; done
           grep -E "FEATHERAUDIO_SELFTEST" sim.log || grep -iE "exception|crash|fault" sim.log | head -40 || true
           grep -q "FEATHERAUDIO_SELFTEST PASS" sim.log
