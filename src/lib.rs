@@ -26,6 +26,10 @@
 //! The engine has two halves: [`Audio`], used from the game, and [`Mixer`], which runs on the
 //! audio thread. They only talk through queues, so the audio thread never waits for the game.
 
+// `chunks_exact(2)` is kept over `as_chunks` (newer clippy suggests it) so older Rust versions
+// still build the crate
+#![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
+
 mod audio;
 #[cfg_attr(not(any(feature = "ogg", feature = "mp3")), allow(dead_code))]
 mod decode;
