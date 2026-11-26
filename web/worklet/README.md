@@ -31,4 +31,4 @@ web/worklet/build.sh xm,ogg,effects   # only what the game needs
   `fromSamples`, `fromAudioBuffer`. The bytes are copied to the audio thread.
 - Ids (sources, handles, buses) are made on the page, so every call returns at once.
   `isPlaying`, `time` and `activeVoices` come from a report every 50 ms.
-- `test.html` is a self-test (`run-test.mjs` runs it in Chromium, Firefox and WebKit).
+- `test.html` is a self-test (`run-test.mjs` runs it in Chromium and WebKit; Firefox needs a sound card to start an AudioContext, so not on CI machines).
